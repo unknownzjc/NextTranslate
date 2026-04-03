@@ -66,3 +66,14 @@ export async function removeEndpointPermission(endpoint: string): Promise<boolea
 export function isProviderConfigured(config: ProviderConfig): boolean {
   return config.endpoint !== '' && config.apiKey !== '' && config.model !== '';
 }
+
+export async function hasEndpointPermission(endpoint: string): Promise<boolean> {
+  if (!endpoint) return false;
+  try {
+    const url = new URL(endpoint);
+    const origin = `${url.protocol}//${url.host}/*`;
+    return chrome.permissions.contains({ origins: [origin] });
+  } catch {
+    return false;
+  }
+}
