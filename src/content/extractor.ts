@@ -3,7 +3,7 @@ import Defuddle from 'defuddle';
 // --- Constants ---
 
 const PARAGRAPH_TAGS = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'TD', 'TH', 'FIGCAPTION', 'DT', 'DD']);
-const SKIP_TAGS = new Set(['CODE', 'PRE', 'KBD', 'SAMP', 'SCRIPT', 'STYLE', 'SVG', 'MATH', 'TEMPLATE', 'NOSCRIPT']);
+const SKIP_TAGS = new Set(['CODE', 'PRE', 'KBD', 'SAMP', 'SCRIPT', 'STYLE', 'SVG', 'MATH', 'TEMPLATE', 'NOSCRIPT', 'NAV']);
 const MIN_TEXT_LENGTH = 10;
 const MAX_TEXT_LENGTH = 10000;
 const DEFUDDLE_TIMEOUT_MS = 3000;
@@ -30,6 +30,7 @@ export function shouldSkipElement(el: Element): boolean {
   if (SKIP_TAGS.has(el.tagName)) return true;
   if (el.getAttribute('aria-hidden') === 'true') return true;
   if (isHidden(el)) return true;
+  if (el.closest('nav, [role="navigation"]')) return true;
 
   const text = (el.textContent ?? '').replace(/\s/g, '');
   if (text.length < MIN_TEXT_LENGTH) return true;
@@ -54,6 +55,21 @@ function isHidden(el: Element): boolean {
   }
 
   return false;
+}
+
+function isLinkHeavy(el: Element): boolean {
+  const links = el.querySelectorAll('a');
+  if (links.length < 3) return false;
+
+  const totalText = (el.textContent ?? '').replace(/\s/g, '').length;
+  if (totalText === 0) return false;
+
+  let linkTextLen = 0;
+  for (const link of links) {
+    linkTextLen += (link.textContent ?? '').replace(/\s/g, '').length;
+  }
+
+  return linkTextLen / totalText > 0.5;
 }
 
 // --- Inline code protection ---
@@ -254,6 +270,19 @@ function findContainerByFingerprint(root: Element, fingerprint: string): Element
 
 // --- Paragraph collection ---
 
+const PARAGRAPH_SELECTOR = Array.from(PARAGRAPH_TAGS).map(t => t.toLowerCase()).join(',');
+
+function hasTranslatableDescendantParagraph(el: Element): boolean {
+  const descendants = el.querySelectorAll(PARAGRAPH_SELECTOR);
+  for (const desc of descendants) {
+    const text = (desc.textContent ?? '').replace(/\s/g, '');
+    if (text.length >= MIN_TEXT_LENGTH) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function collectParagraphs(container: Element, translatedSet: Set<Element>): ExtractedParagraph[] {
   const paragraphs: ExtractedParagraph[] = [];
   const visited = new Set<Element>();
@@ -263,14 +292,18 @@ export function collectParagraphs(container: Element, translatedSet: Set<Element
     if (translatedSet.has(el)) return;
 
     if (PARAGRAPH_TAGS.has(el.tagName)) {
-      const hasChildParagraph = Array.from(el.children).some(child => PARAGRAPH_TAGS.has(child.tagName));
-      if (!hasChildParagraph && !visited.has(el)) {
+      // Skip navigation-like elements (high link density)
+      if (isLinkHeavy(el)) return;
+
+      // Only skip if a descendant paragraph has enough text to be translated on its own
+      if (!hasTranslatableDescendantParagraph(el) && !visited.has(el)) {
         visited.add(el);
         const { text, codeMap } = extractTextWithCodeProtection(el);
         const trimmed = text.trim();
         if (trimmed.length >= MIN_TEXT_LENGTH && trimmed.length <= MAX_TEXT_LENGTH) {
           paragraphs.push({ element: el, text: trimmed, codeMap });
         }
+        return; // Don't recurse into leaf paragraph elements
       }
     }
 
