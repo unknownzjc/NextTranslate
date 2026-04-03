@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "NextTranslate",
+  "version": "0.1.0",
+  "description": "AI-powered webpage translator - translate English content to Chinese inline",
+  "permissions": ["activeTab", "storage", "scripting", "alarms", "contextMenus"],
+  "optional_host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background/index.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup/index.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "commands": {
+    "toggle-translate": {
+      "suggested_key": { "default": "Alt+T", "mac": "MacCtrl+T" },
+      "description": "Translate/cancel translation of current page"
+    }
+  }
+}

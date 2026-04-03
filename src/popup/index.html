@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NextTranslate</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <div id="header">
+      <h1>NextTranslate</h1>
+      <div id="status-bar" class="hidden"></div>
+    </div>
+
+    <button id="translate-btn" disabled>翻译全文</button>
+
+    <div id="config-warning" class="hidden">
+      <p>请先配置翻译服务</p>
+    </div>
+
+    <div id="settings">
+      <h2>翻译设置</h2>
+
+      <label>
+        <span>API Endpoint</span>
+        <input type="text" id="endpoint" placeholder="https://api.openai.com/v1" spellcheck="false">
+      </label>
+
+      <label>
+        <span>API Key</span>
+        <input type="password" id="api-key" placeholder="sk-..." spellcheck="false">
+      </label>
+
+      <label>
+        <span>Model</span>
+        <input type="text" id="model" placeholder="gpt-4o-mini" spellcheck="false">
+      </label>
+
+      <label>
+        <span>目标语言</span>
+        <select id="target-language">
+          <option value="Simplified Chinese" selected>简体中文</option>
+          <option value="Traditional Chinese">繁體中文</option>
+          <option value="Japanese">日本語</option>
+          <option value="Korean">한국어</option>
+          <option value="English">English</option>
+        </select>
+      </label>
+
+      <div id="settings-actions">
+        <button id="save-btn">保存设置</button>
+        <button id="test-btn">测试连接</button>
+      </div>
+
+      <div id="test-result" class="hidden"></div>
+    </div>
+  </div>
+  <script type="module" src="index.ts"></script>
+</body>
+</html>
