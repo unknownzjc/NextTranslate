@@ -1,4 +1,4 @@
-import { loadProviderConfig, saveProviderConfig, requestEndpointPermission, removeEndpointPermission, isProviderConfigured, hasEndpointPermission } from '@shared/storage';
+import { loadProviderConfig, saveProviderConfig, isProviderConfigured } from '@shared/storage';
 import type { ProviderConfig } from '@shared/types';
 import type { ToggleTranslateResponse, TranslateStatusMsg, TestConnectionResult } from '@shared/messages';
 
@@ -29,12 +29,9 @@ const statusBar = $<HTMLDivElement>('#status-bar');
 const testResult = $<HTMLDivElement>('#test-result');
 
 let currentConfig: ProviderConfig;
-let previousEndpoint = '';
 
 async function init() {
   currentConfig = await loadProviderConfig();
-  previousEndpoint = currentConfig.endpoint;
-
   endpointInput.value = currentConfig.endpoint;
   apiKeyInput.value = currentConfig.apiKey;
   modelInput.value = currentConfig.model;
@@ -46,11 +43,6 @@ async function init() {
   updateEndpointVisibility(detectedProvider);
 
   updateTranslateButton();
-
-  // Check if endpoint permission is missing (e.g., popup closed during permission dialog)
-  if (currentConfig.endpoint && !(await hasEndpointPermission(currentConfig.endpoint))) {
-    showTestResult('尚未授权访问翻译服务，请重新保存设置以授权', 'error');
-  }
 
   await queryCurrentStatus();
 }
@@ -101,38 +93,18 @@ saveBtn.addEventListener('click', async () => {
   };
 
   // Validate endpoint URL format before saving
-  const endpointChanged = newConfig.endpoint && newConfig.endpoint !== previousEndpoint;
-  if (endpointChanged) {
+  if (newConfig.endpoint) {
     try {
-      new URL(newConfig.endpoint!);
+      new URL(newConfig.endpoint);
     } catch {
       showTestResult('Endpoint URL 格式无效', 'error');
       return;
     }
   }
 
-  // Save config FIRST so settings persist even if the permission dialog closes the popup
   await saveProviderConfig(newConfig);
   currentConfig = await loadProviderConfig();
   updateTranslateButton();
-
-  if (endpointChanged) {
-    try {
-      const granted = await requestEndpointPermission(newConfig.endpoint!);
-      if (!granted) {
-        showTestResult('设置已保存，但需要授权才能访问翻译服务', 'error');
-        return;
-      }
-      if (previousEndpoint) {
-        await removeEndpointPermission(previousEndpoint).catch(() => {});
-      }
-      previousEndpoint = newConfig.endpoint!;
-    } catch {
-      showTestResult('设置已保存，但授权请求失败', 'error');
-      return;
-    }
-  }
-
   showTestResult('设置已保存', 'success');
 });
 

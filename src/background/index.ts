@@ -440,7 +440,10 @@ async function handleTestConnection(): Promise<TestConnectionResult> {
     if (err instanceof Error && err.name === 'AbortError') {
       return { success: false, error: '连接超时' };
     }
-    return { success: false, error: '无法连接到服务器' };
+    return {
+      success: false,
+      error: '无法连接到服务器，请检查网络、接口地址，或确认目标服务允许浏览器扩展访问（必要时使用代理）',
+    };
   }
 }
 
