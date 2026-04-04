@@ -8,6 +8,7 @@ div.nt-translation[data-nt] {
   color: var(--nt-text-color, #555) !important;
   user-select: none !important;
   position: relative !important;
+  scroll-margin-top: 60px !important;
 }
 
 /* Light theme */

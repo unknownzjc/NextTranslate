@@ -15,9 +15,47 @@ let toggleBusy = false;
 let mutationObserver: MutationObserver | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let mainContainer: Element | null = null;
+let hasScrolledAfterTranslation = false;
 
 const injector = new Injector();
 const progressBar = new ProgressBar();
+
+function scrollToFirstTranslation() {
+  // Delay to let frameworks (React on X.com) finish re-rendering after DOM insertions
+  setTimeout(() => {
+    const container = mainContainer ?? document;
+    const first = container.querySelector('.nt-translation');
+    if (!first) return;
+
+    // Find the nearest scrollable ancestor to scroll directly
+    const scrollable = findScrollableAncestor(first);
+    if (!scrollable) return;
+
+    const rect = first.getBoundingClientRect();
+    const viewportHeight = scrollable === document.documentElement
+      ? window.innerHeight
+      : scrollable.clientHeight;
+
+    // Scroll to center the element in the viewport
+    const offset = rect.top - viewportHeight / 2 + rect.height / 2;
+    scrollable.scrollBy({ top: offset, behavior: 'smooth' });
+  }, 100);
+}
+
+function findScrollableAncestor(el: Element): Element | null {
+  let current = el.parentElement;
+  while (current && current !== document.documentElement) {
+    const { overflowY } = getComputedStyle(current);
+    if ((overflowY === 'auto' || overflowY === 'scroll') && current.scrollHeight > current.clientHeight) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  if (document.documentElement.scrollHeight > document.documentElement.clientHeight) {
+    return document.documentElement;
+  }
+  return null;
+}
 
 const translator = new Translator({
   onBatchTranslated: (_, elements, translations) => {
@@ -31,6 +69,10 @@ const translator = new Translator({
   onComplete: () => {
     state = 'done';
     progressBar.complete();
+    if (!hasScrolledAfterTranslation) {
+      hasScrolledAfterTranslation = true;
+      scrollToFirstTranslation();
+    }
   },
   onError: (error) => {
     progressBar.error(error);
@@ -67,6 +109,9 @@ function handleToggle(): ToggleTranslateResponse {
       case 'done':
         translationsVisible = !translationsVisible;
         injector.setVisibility(translationsVisible);
+        if (translationsVisible) {
+          scrollToFirstTranslation();
+        }
         return { action: translationsVisible ? 'toggled_visible' : 'toggled_hidden' };
     }
   } finally {
@@ -79,6 +124,7 @@ function handleToggle(): ToggleTranslateResponse {
 async function startTranslation() {
   state = 'translating';
   translationsVisible = true;
+  hasScrolledAfterTranslation = false;
 
   const config = await loadProviderConfig();
   mainContainer = await findMainContainer();
@@ -165,6 +211,7 @@ function handleSpaNavigation() {
   translator.resetState();
   stopObserver();
   mainContainer = null;
+  hasScrolledAfterTranslation = false;
 }
 
 window.addEventListener('popstate', handleSpaNavigation);
