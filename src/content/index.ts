@@ -15,6 +15,7 @@ let toggleBusy = false;
 let mutationObserver: MutationObserver | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let mainContainer: Element | null = null;
+let hasScrolledAfterTranslation = false;
 
 const injector = new Injector();
 const progressBar = new ProgressBar();
@@ -41,7 +42,10 @@ const translator = new Translator({
   onComplete: () => {
     state = 'done';
     progressBar.complete();
-    scrollToFirstTranslation();
+    if (!hasScrolledAfterTranslation) {
+      hasScrolledAfterTranslation = true;
+      scrollToFirstTranslation();
+    }
   },
   onError: (error) => {
     progressBar.error(error);
@@ -93,6 +97,7 @@ function handleToggle(): ToggleTranslateResponse {
 async function startTranslation() {
   state = 'translating';
   translationsVisible = true;
+  hasScrolledAfterTranslation = false;
 
   const config = await loadProviderConfig();
   mainContainer = await findMainContainer();
@@ -179,6 +184,7 @@ function handleSpaNavigation() {
   translator.resetState();
   stopObserver();
   mainContainer = null;
+  hasScrolledAfterTranslation = false;
 }
 
 window.addEventListener('popstate', handleSpaNavigation);
