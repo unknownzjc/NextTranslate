@@ -80,14 +80,15 @@ function isLinkHeavy(el: Element): boolean {
 
 export function extractTextWithCodeProtection(el: Element): { text: string; codeMap: Map<string, string> } {
   const codeMap = new Map<string, string>();
-  const codeElements = el.querySelectorAll(':scope > code, :scope code');
-
-  if (codeElements.length === 0) {
-    return { text: el.textContent ?? '', codeMap };
-  }
-
   const clone = el.cloneNode(true) as Element;
+
+  // Remove previously injected translation UI so re-translation uses only source content.
+  clone.querySelectorAll('.nt-translation, [data-nt]').forEach(node => node.remove());
+
   const cloneCodeElements = clone.querySelectorAll('code');
+  if (cloneCodeElements.length === 0) {
+    return { text: clone.textContent ?? '', codeMap };
+  }
 
   cloneCodeElements.forEach((code, index) => {
     const placeholder = `⟨NT_CODE_${index}⟩`;
@@ -294,7 +295,11 @@ function hasTranslatableDescendantParagraph(el: Element): boolean {
   return false;
 }
 
-export function collectParagraphs(container: Element, translatedSet: Set<Element>): ExtractedParagraph[] {
+export function collectParagraphs(
+  container: Element,
+  shouldSkipTranslated: (el: Element, text: string) => boolean = () => false,
+  includeElement: (el: Element) => boolean = () => true,
+): ExtractedParagraph[] {
   const compat = getSiteCompat(location.hostname);
   const effectiveParagraphTags = compat.extraParagraphTags
     ? new Set([...PARAGRAPH_TAGS, ...compat.extraParagraphTags])
@@ -302,26 +307,31 @@ export function collectParagraphs(container: Element, translatedSet: Set<Element
   const paragraphs: ExtractedParagraph[] = [];
   const visited = new Set<Element>();
 
+  function tryCollectElement(el: Element): boolean {
+    if (!includeElement(el)) return false;
+
+    const { text, codeMap } = extractTextWithCodeProtection(el);
+    const trimmed = text.trim();
+    if (trimmed.length < MIN_TEXT_LENGTH || trimmed.length > MAX_TEXT_LENGTH) return false;
+    if (shouldSkipTranslated(el, trimmed)) return false;
+
+    visited.add(el);
+    paragraphs.push({ element: el, text: trimmed, codeMap });
+    return true;
+  }
+
   // Collect elements matched by site-specific paragraph selectors first
   if (compat.paragraphSelector) {
     const selectorMatches = container.querySelectorAll(compat.paragraphSelector);
     for (const el of selectorMatches) {
       if (visited.has(el)) continue;
-      if (translatedSet.has(el)) continue;
       if (shouldSkipElement(el, compat)) continue;
-
-      visited.add(el);
-      const { text, codeMap } = extractTextWithCodeProtection(el);
-      const trimmed = text.trim();
-      if (trimmed.length >= MIN_TEXT_LENGTH && trimmed.length <= MAX_TEXT_LENGTH) {
-        paragraphs.push({ element: el, text: trimmed, codeMap });
-      }
+      tryCollectElement(el);
     }
   }
 
   function walk(el: Element) {
     if (shouldSkipElement(el, compat)) return;
-    if (translatedSet.has(el)) return;
 
     if (effectiveParagraphTags.has(el.tagName)) {
       // Skip navigation-like elements (high link density)
@@ -329,13 +339,9 @@ export function collectParagraphs(container: Element, translatedSet: Set<Element
 
       // Only skip if a descendant paragraph has enough text to be translated on its own
       if (!hasTranslatableDescendantParagraph(el) && !visited.has(el)) {
-        visited.add(el);
-        const { text, codeMap } = extractTextWithCodeProtection(el);
-        const trimmed = text.trim();
-        if (trimmed.length >= MIN_TEXT_LENGTH && trimmed.length <= MAX_TEXT_LENGTH) {
-          paragraphs.push({ element: el, text: trimmed, codeMap });
+        if (tryCollectElement(el)) {
+          return; // Don't recurse into leaf paragraph elements
         }
-        return; // Don't recurse into leaf paragraph elements
       }
     }
 

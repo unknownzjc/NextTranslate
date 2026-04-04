@@ -5,6 +5,7 @@ import type {
   TranslateBatchResult,
   TranslateStatusMsg,
   QueryStatusMsg,
+  ReportTranslateStatusMsg,
   TestConnectionResult,
 } from '@shared/messages';
 
@@ -102,11 +103,8 @@ async function processItem(item: QueueItem) {
   const state = getOrCreateTabState(tabId);
   const controller = new AbortController();
   state.abortControllers.set(message.batchId, controller);
-
-  // Start alarm keepalive on first batch
-  if (state.completedBatches === 0 && state.totalBatches > 0) {
-    startAlarmKeepalive();
-  }
+  state.status = 'translating';
+  syncAlarmKeepalive();
 
   try {
     const config = await loadProviderConfig();
@@ -185,12 +183,7 @@ async function processItem(item: QueueItem) {
       }
     }
 
-    // Reset backoff on success
     currentBackoffDelay = 2000;
-
-    // Update progress
-    state.completedBatches++;
-    broadcastProgress(tabId, state);
 
   } catch (err: unknown) {
     if (err instanceof Error && err.name === 'AbortError') {
@@ -198,16 +191,19 @@ async function processItem(item: QueueItem) {
     }
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';
 
-    // Retry budget
     if (state.retryBudget > 0) {
       state.retryBudget--;
       enqueue(item);
       return;
     }
 
+    state.status = 'error';
+    state.error = errorMsg;
+    publishTabStatus(tabId, state);
     sendResponse({ batchId: message.batchId, translations: [], error: errorMsg });
   } finally {
     state.abortControllers.delete(message.batchId);
+    syncAlarmKeepalive();
   }
 }
 
@@ -249,37 +245,61 @@ function clearTabState(tabId: number) {
   if (idx !== -1) activeTabIds.splice(idx, 1);
 
   chrome.action.setBadgeText({ text: '', tabId }).catch(() => {});
-
-  // Stop alarm if no more active tabs
-  if (tabStates.size === 0) {
-    stopAlarmKeepalive();
-  }
+  syncAlarmKeepalive();
 }
 
-function broadcastProgress(tabId: number, state: TabState) {
-  const progress = { completed: state.completedBatches, total: state.totalBatches };
-  const pct = state.totalBatches > 0 ? Math.round((state.completedBatches / state.totalBatches) * 100) : 0;
+function publishTabStatus(tabId: number, state: TabState) {
+  const progress = state.totalBatches > 0
+    ? { completed: state.completedBatches, total: state.totalBatches }
+    : undefined;
+  const pct = progress ? Math.round((progress.completed / progress.total) * 100) : 0;
 
-  chrome.action.setBadgeText({ text: `${pct}%`, tabId }).catch(() => {});
-  chrome.action.setBadgeBackgroundColor({ color: '#4A90D9', tabId }).catch(() => {});
-
-  const msg: TranslateStatusMsg = {
-    type: 'TRANSLATE_STATUS',
-    status: state.completedBatches >= state.totalBatches ? 'done' : 'translating',
-    progress,
-  };
-
-  if (msg.status === 'done') {
-    state.status = 'done';
-    chrome.action.setBadgeText({ text: '\u2713', tabId }).catch(() => {});
-    chrome.action.setBadgeBackgroundColor({ color: '#4CAF50', tabId }).catch(() => {});
-    setTimeout(() => chrome.action.setBadgeText({ text: '', tabId }).catch(() => {}), 3000);
+  switch (state.status) {
+    case 'translating':
+      chrome.action.setBadgeText({ text: progress ? `${pct}%` : '', tabId }).catch(() => {});
+      chrome.action.setBadgeBackgroundColor({ color: '#4A90D9', tabId }).catch(() => {});
+      break;
+    case 'done':
+      chrome.action.setBadgeText({ text: '\u2713', tabId }).catch(() => {});
+      chrome.action.setBadgeBackgroundColor({ color: '#4CAF50', tabId }).catch(() => {});
+      setTimeout(() => chrome.action.setBadgeText({ text: '', tabId }).catch(() => {}), 3000);
+      break;
+    case 'error':
+      chrome.action.setBadgeText({ text: '!', tabId }).catch(() => {});
+      chrome.action.setBadgeBackgroundColor({ color: '#F44336', tabId }).catch(() => {});
+      break;
+    case 'cancelled':
+      chrome.action.setBadgeText({ text: '\u2014', tabId }).catch(() => {});
+      chrome.action.setBadgeBackgroundColor({ color: '#9E9E9E', tabId }).catch(() => {});
+      setTimeout(() => chrome.action.setBadgeText({ text: '', tabId }).catch(() => {}), 3000);
+      break;
   }
 
-  chrome.runtime.sendMessage(msg).catch(() => {});
+  chrome.runtime.sendMessage({
+    type: 'TRANSLATE_STATUS',
+    status: state.status,
+    progress,
+    error: state.error,
+  } satisfies TranslateStatusMsg).catch(() => {});
+
+  syncAlarmKeepalive();
 }
 
 // --- Alarm Keepalive ---
+
+function hasActiveTranslations(): boolean {
+  return Array.from(tabStates.values()).some((state) =>
+    state.status === 'translating' || state.abortControllers.size > 0
+  );
+}
+
+function syncAlarmKeepalive() {
+  if (hasActiveTranslations()) {
+    startAlarmKeepalive();
+  } else {
+    stopAlarmKeepalive();
+  }
+}
 
 function startAlarmKeepalive() {
   chrome.alarms.create('nt-keepalive', { periodInMinutes: 1 });
@@ -304,7 +324,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'TRANSLATE_BATCH': {
       if (!tabId) return;
       const state = getOrCreateTabState(tabId);
-      state.totalBatches = Math.max(state.totalBatches, message.totalBatches);
+      state.status = 'translating';
+      state.error = undefined;
       enqueue({
         tabId,
         message: message as TranslateBatchMsg,
@@ -312,6 +333,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse: sendResponse as (result: TranslateBatchResult) => void,
       });
       return true;
+    }
+
+    case 'REPORT_TRANSLATE_STATUS': {
+      if (!tabId) return;
+      const report = message as ReportTranslateStatusMsg;
+      const state = getOrCreateTabState(tabId);
+      state.status = report.status;
+      state.error = report.error;
+      state.completedBatches = report.progress?.completed ?? state.completedBatches;
+      state.totalBatches = report.progress?.total ?? state.totalBatches;
+      publishTabStatus(tabId, state);
+      sendResponse({ ok: true });
+      return;
     }
 
     case 'CANCEL_TRANSLATE': {
@@ -373,27 +407,78 @@ async function handleTestConnection(): Promise<TestConnectionResult> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
 
-    const response = await fetch(`${config.endpoint}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    });
+    try {
+      const response = await fetch(`${config.endpoint}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
 
-    clearTimeout(timeout);
+      if (response.ok) return { success: true };
 
-    if (response.ok) return { success: true };
-    if (response.status === 401 || response.status === 403) return { success: false, error: 'API Key 无效' };
-    if (response.status === 404) return { success: false, error: '端点地址错误' };
-    return { success: false, error: `服务器返回错误: ${response.status}` };
+      const detail = await readErrorDetail(response);
+      if (response.status === 401 || response.status === 403) {
+        return { success: false, error: detail ? `API Key 无效\n${detail}` : 'API Key 无效' };
+      }
+      if (response.status === 404) {
+        return { success: false, error: detail ? `端点地址错误\n${detail}` : '端点地址错误' };
+      }
+      return {
+        success: false,
+        error: detail
+          ? `服务器返回错误: ${response.status}\n${detail}`
+          : `服务器返回错误: ${response.status}`,
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
   } catch (err: unknown) {
     if (err instanceof Error && err.name === 'AbortError') {
       return { success: false, error: '连接超时' };
     }
     return { success: false, error: '无法连接到服务器' };
+  }
+}
+
+async function readErrorDetail(response: Response): Promise<string | null> {
+  try {
+    const contentType = response.headers.get('content-type') ?? '';
+
+    if (contentType.includes('application/json')) {
+      const data = await response.json() as {
+        error?: { message?: unknown; type?: unknown; code?: unknown };
+        message?: unknown;
+        detail?: unknown;
+      };
+
+      const message = [
+        typeof data.error?.message === 'string' ? data.error.message : null,
+        typeof data.message === 'string' ? data.message : null,
+        typeof data.detail === 'string' ? data.detail : null,
+      ].find((value): value is string => Boolean(value?.trim()));
+
+      const meta = [
+        typeof data.error?.type === 'string' ? `type: ${data.error.type}` : null,
+        typeof data.error?.code === 'string' || typeof data.error?.code === 'number'
+          ? `code: ${String(data.error.code)}`
+          : null,
+      ].filter((value): value is string => Boolean(value));
+
+      if (message && meta.length > 0) return `${message}\n${meta.join('\n')}`;
+      if (message) return message;
+
+      const fallback = JSON.stringify(data);
+      return fallback === '{}' ? null : fallback;
+    }
+
+    const text = (await response.text()).trim();
+    return text || null;
+  } catch {
+    return null;
   }
 }
 

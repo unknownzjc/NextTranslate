@@ -12,6 +12,13 @@ export type TranslateBatchMsg = {
   totalBatches: number;
 };
 
+export type ReportTranslateStatusMsg = {
+  type: 'REPORT_TRANSLATE_STATUS';
+  status: 'translating' | 'done' | 'error';
+  progress?: { completed: number; total: number };
+  error?: string;
+};
+
 export type CancelTranslateMsg = { type: 'CANCEL_TRANSLATE' };
 
 // Background → sendResponse
@@ -44,6 +51,7 @@ export type KeepaliveMsg = { type: 'KEEPALIVE' };
 
 export type MessageFromContentScript =
   | TranslateBatchMsg
+  | ReportTranslateStatusMsg
   | CancelTranslateMsg
   | KeepaliveMsg;
 

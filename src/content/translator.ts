@@ -1,10 +1,32 @@
 import type { TranslateBatchResult } from '@shared/messages';
-import { collectParagraphs, splitIntoBatches, extractGlossaryTerms, restoreCodePlaceholders, splitLongText, type ExtractedParagraph } from './extractor';
+import {
+  collectParagraphs,
+  splitIntoBatches,
+  extractGlossaryTerms,
+  restoreCodePlaceholders,
+  splitLongText,
+  type ExtractedParagraph,
+} from './extractor';
 
 const MAX_BATCHES_PER_TAB = 100;
 const KEEPALIVE_INTERVAL_MS = 25000;
 const SW_RETRY_MAX = 5;
 const SW_RETRY_BASE_MS = 1000;
+
+interface ChunkJob {
+  text: string;
+  blockIndex: number;
+  chunkIndex: number;
+}
+
+interface BlockState {
+  element: Element;
+  sourceText: string;
+  codeMap: Map<string, string>;
+  translatedChunks: Array<string | undefined>;
+  remainingChunks: number;
+  rendered: boolean;
+}
 
 // FNV-1a hash
 export function fnv1a(str: string): string {
@@ -24,114 +46,123 @@ export interface TranslatorCallbacks {
   onCancelled: () => void;
 }
 
+export interface TranslatorStartOptions {
+  includeElement?: (el: Element) => boolean;
+}
+
 export class Translator {
   private cache = new Map<string, string>();
   private translatedSet = new Set<Element>();
-  private batchMap = new Map<string, { seq: number; elements: Element[]; codeMaps: Map<string, string>[] }>();
-  private nextRenderSeq = 0;
-  private pendingRenders = new Map<number, { elements: Element[]; translations: string[] }>();
+  private translatedSourceText = new WeakMap<Element, string>();
+  private batchMap = new Map<string, ChunkJob[]>();
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   private cancelled = false;
   private glossary: string[] = [];
   private targetLanguage = 'Simplified Chinese';
-  private completedBatches = 0;
-  private totalBatches = 0;
+  private renderedBlocks = 0;
+  private totalBlocks = 0;
+  private runId = 0;
+  private blockStates: BlockState[] = [];
 
   constructor(private callbacks: TranslatorCallbacks) {}
 
-  async start(container: Element, targetLanguage: string) {
+  hasPendingWork(container: Element, options: TranslatorStartOptions = {}): boolean {
+    return collectParagraphs(
+      container,
+      (el, text) => this.translatedSet.has(el) && this.translatedSourceText.get(el) === text,
+      options.includeElement,
+    ).length > 0;
+  }
+
+  async start(container: Element, targetLanguage: string, options: TranslatorStartOptions = {}) {
+    const runId = ++this.runId;
     this.cancelled = false;
     this.targetLanguage = targetLanguage;
-    this.nextRenderSeq = 0;
-    this.completedBatches = 0;
-    this.totalBatches = 0;
-    this.pendingRenders.clear();
+    this.renderedBlocks = 0;
+    this.totalBlocks = 0;
+    this.blockStates = [];
+    this.batchMap.clear();
+    this.stopKeepalive();
 
-    const paragraphs = collectParagraphs(container, this.translatedSet);
+    const paragraphs = collectParagraphs(
+      container,
+      (el, text) => this.translatedSet.has(el) && this.translatedSourceText.get(el) === text,
+      options.includeElement,
+    );
     if (paragraphs.length === 0) {
       this.callbacks.onComplete();
       return;
     }
 
-    // Split long paragraphs
-    const processedParagraphs: ExtractedParagraph[] = [];
-    for (const p of paragraphs) {
-      const subTexts = splitLongText(p.text);
-      if (subTexts.length === 1) {
-        processedParagraphs.push(p);
-      } else {
-        for (const subText of subTexts) {
-          processedParagraphs.push({ element: p.element, text: subText, codeMap: p.codeMap });
+    this.totalBlocks = paragraphs.length;
+    this.callbacks.onProgress(0, this.totalBlocks);
+
+    // Extract glossary from original block text.
+    this.glossary = extractGlossaryTerms(paragraphs.map(p => p.text));
+
+    const uncachedJobs: ChunkJob[] = [];
+
+    paragraphs.forEach((paragraph, blockIndex) => {
+      const chunks = splitLongText(paragraph.text);
+      const blockState: BlockState = {
+        element: paragraph.element,
+        sourceText: paragraph.text,
+        codeMap: paragraph.codeMap,
+        translatedChunks: new Array(chunks.length),
+        remainingChunks: chunks.length,
+        rendered: false,
+      };
+
+      this.blockStates.push(blockState);
+
+      chunks.forEach((chunkText, chunkIndex) => {
+        const cacheKey = fnv1a(chunkText + '\0' + targetLanguage);
+        const cached = this.cache.get(cacheKey);
+
+        if (cached !== undefined) {
+          blockState.translatedChunks[chunkIndex] = cached;
+          blockState.remainingChunks--;
+        } else {
+          uncachedJobs.push({ text: chunkText, blockIndex, chunkIndex });
         }
-      }
+      });
+    });
+
+    for (let blockIndex = 0; blockIndex < this.blockStates.length; blockIndex++) {
+      this.tryRenderBlock(blockIndex, runId);
     }
 
-    // Extract glossary
-    const texts = processedParagraphs.map(p => p.text);
-    this.glossary = extractGlossaryTerms(texts);
-
-    // Check cache hits
-    const uncachedIndices: number[] = [];
-    const cachedResults = new Map<number, string>();
-
-    for (let i = 0; i < texts.length; i++) {
-      const cacheKey = fnv1a(texts[i] + '\0' + targetLanguage);
-      const cached = this.cache.get(cacheKey);
-      if (cached) {
-        cachedResults.set(i, cached);
-      } else {
-        uncachedIndices.push(i);
-      }
-    }
-
-    // Render cached translations immediately
-    for (const [idx, translation] of cachedResults) {
-      const p = processedParagraphs[idx];
-      const restored = restoreCodePlaceholders(translation, p.codeMap);
-      this.callbacks.onBatchTranslated(-1, [p.element], [restored]);
-      this.translatedSet.add(p.element);
-    }
-
-    if (uncachedIndices.length === 0) {
-      this.callbacks.onComplete();
+    if (this.renderedBlocks >= this.totalBlocks) {
+      this.finishRun(runId);
       return;
     }
 
-    // Split into batches
-    const uncachedTexts = uncachedIndices.map(i => texts[i]);
-    const batchIndices = splitIntoBatches(uncachedTexts);
+    const batchJobs = capBatchCount(splitIntoBatches(uncachedJobs.map(job => job.text)), MAX_BATCHES_PER_TAB)
+      .map(indices => indices.map(index => uncachedJobs[index]));
 
-    const totalBatches = Math.min(batchIndices.length, MAX_BATCHES_PER_TAB);
-    this.totalBatches = totalBatches;
+    if (batchJobs.length === 0) {
+      this.finishRun(runId);
+      return;
+    }
 
-    this.callbacks.onProgress(0, totalBatches);
     this.startKeepalive();
 
-    for (let seq = 0; seq < totalBatches; seq++) {
-      if (this.cancelled) break;
+    for (let seq = 0; seq < batchJobs.length; seq++) {
+      if (this.cancelled || runId !== this.runId) break;
 
-      const localIndices = batchIndices[seq];
-      const batchTexts = localIndices.map(i => uncachedTexts[i]);
-      const batchElements = localIndices.map(i => processedParagraphs[uncachedIndices[i]].element);
-      const batchCodeMaps = localIndices.map(i => processedParagraphs[uncachedIndices[i]].codeMap);
+      const jobs = batchJobs[seq];
       const batchId = crypto.randomUUID();
+      this.batchMap.set(batchId, jobs);
 
-      this.batchMap.set(batchId, { seq, elements: batchElements, codeMaps: batchCodeMaps });
-
-      this.sendBatch(batchId, batchTexts, totalBatches, seq, uncachedTexts, localIndices);
+      void this.sendBatch(batchId, jobs, runId);
     }
   }
 
-  private async sendBatch(
-    batchId: string,
-    texts: string[],
-    totalBatches: number,
-    seq: number,
-    allTexts: string[],
-    localIndices: number[],
-  ) {
+  private async sendBatch(batchId: string, jobs: ChunkJob[], runId: number) {
+    const texts = jobs.map(job => job.text);
     let retries = 0;
-    while (retries < SW_RETRY_MAX && !this.cancelled) {
+
+    while (retries < SW_RETRY_MAX && !this.cancelled && runId === this.runId) {
       try {
         if (chrome.runtime.id === undefined) {
           this.handleOrphaned();
@@ -142,33 +173,36 @@ export class Translator {
           type: 'TRANSLATE_BATCH',
           batchId,
           texts,
-          totalBatches,
+          totalBatches: 0,
         });
 
-        if (!this.batchMap.has(batchId)) return;
+        if (runId !== this.runId || !this.batchMap.has(batchId)) return;
 
         if (result.error) {
+          this.stopKeepalive();
           this.callbacks.onError(result.error);
           return;
         }
 
-        // Cache results
+        const batchJobs = this.batchMap.get(batchId)!;
+        this.batchMap.delete(batchId);
+
         for (let i = 0; i < result.translations.length; i++) {
-          const originalIdx = localIndices[i];
-          const cacheKey = fnv1a(allTexts[originalIdx] + '\0' + this.targetLanguage);
+          const job = batchJobs[i];
+          if (!job) continue;
+
+          const cacheKey = fnv1a(job.text + '\0' + this.targetLanguage);
           this.cache.set(cacheKey, result.translations[i]);
+
+          const blockState = this.blockStates[job.blockIndex];
+          if (!blockState || blockState.rendered || blockState.translatedChunks[job.chunkIndex] !== undefined) {
+            continue;
+          }
+
+          blockState.translatedChunks[job.chunkIndex] = result.translations[i];
+          blockState.remainingChunks--;
+          this.tryRenderBlock(job.blockIndex, runId);
         }
-
-        // Restore code placeholders
-        const batchInfo = this.batchMap.get(batchId)!;
-        const restoredTranslations = result.translations.map((t, i) =>
-          restoreCodePlaceholders(t, batchInfo.codeMaps[i])
-        );
-
-        this.completedBatches++;
-        this.callbacks.onProgress(this.completedBatches, this.totalBatches);
-
-        this.queueRender(seq, batchInfo.elements, restoredTranslations, totalBatches);
         return;
 
       } catch (err: unknown) {
@@ -179,6 +213,7 @@ export class Translator {
 
         retries++;
         if (retries >= SW_RETRY_MAX) {
+          this.stopKeepalive();
           this.callbacks.onError('Service Worker 连接失败，翻译中止');
           return;
         }
@@ -189,40 +224,44 @@ export class Translator {
     }
   }
 
-  private queueRender(seq: number, elements: Element[], translations: string[], totalBatches: number) {
-    this.pendingRenders.set(seq, { elements, translations });
+  private tryRenderBlock(blockIndex: number, runId: number) {
+    if (this.cancelled || runId !== this.runId) return;
 
-    while (this.pendingRenders.has(this.nextRenderSeq)) {
-      const batch = this.pendingRenders.get(this.nextRenderSeq)!;
-      this.pendingRenders.delete(this.nextRenderSeq);
+    const blockState = this.blockStates[blockIndex];
+    if (!blockState || blockState.rendered || blockState.remainingChunks > 0) return;
 
-      const validElements: Element[] = [];
-      const validTranslations: string[] = [];
-      for (let i = 0; i < batch.elements.length; i++) {
-        if (batch.elements[i].isConnected) {
-          validElements.push(batch.elements[i]);
-          validTranslations.push(batch.translations[i]);
-          this.translatedSet.add(batch.elements[i]);
-        }
-      }
+    const translatedText = joinTranslatedChunks(
+      blockState.translatedChunks.map(chunk => restoreCodePlaceholders(chunk ?? '', blockState.codeMap)),
+      this.targetLanguage,
+    );
 
-      if (validElements.length > 0) {
-        this.callbacks.onBatchTranslated(this.nextRenderSeq, validElements, validTranslations);
-      }
+    blockState.rendered = true;
 
-      this.nextRenderSeq++;
+    if (blockState.element.isConnected) {
+      this.callbacks.onBatchTranslated(blockIndex, [blockState.element], [translatedText]);
+      this.translatedSet.add(blockState.element);
+      this.translatedSourceText.set(blockState.element, blockState.sourceText);
     }
 
-    if (this.nextRenderSeq >= totalBatches) {
-      this.stopKeepalive();
-      this.callbacks.onComplete();
+    this.renderedBlocks++;
+    this.callbacks.onProgress(this.renderedBlocks, this.totalBlocks);
+
+    if (this.renderedBlocks >= this.totalBlocks) {
+      this.finishRun(runId);
     }
+  }
+
+  private finishRun(runId: number) {
+    if (runId !== this.runId || this.cancelled) return;
+    this.stopKeepalive();
+    this.callbacks.onComplete();
   }
 
   cancel() {
     this.cancelled = true;
+    this.runId++;
     this.batchMap.clear();
-    this.pendingRenders.clear();
+    this.blockStates = [];
     this.stopKeepalive();
 
     try {
@@ -238,13 +277,15 @@ export class Translator {
 
   resetState() {
     this.translatedSet.clear();
+    this.translatedSourceText = new WeakMap();
     this.batchMap.clear();
-    this.pendingRenders.clear();
-    this.nextRenderSeq = 0;
-    this.completedBatches = 0;
-    this.totalBatches = 0;
+    this.blockStates = [];
+    this.renderedBlocks = 0;
+    this.totalBlocks = 0;
+    this.runId++;
     this.cancelled = false;
     this.glossary = [];
+    this.stopKeepalive();
   }
 
   private startKeepalive() {
@@ -273,4 +314,25 @@ export class Translator {
     banner.appendChild(reloadBtn);
     document.body.appendChild(banner);
   }
+}
+
+function joinTranslatedChunks(chunks: string[], targetLanguage: string): string {
+  const separator = isCjkTargetLanguage(targetLanguage) ? '' : ' ';
+  return chunks.map(chunk => chunk.trim()).filter(Boolean).join(separator).trim();
+}
+
+function isCjkTargetLanguage(targetLanguage: string): boolean {
+  return targetLanguage === 'Simplified Chinese'
+    || targetLanguage === 'Traditional Chinese'
+    || targetLanguage === 'Japanese'
+    || targetLanguage === 'Korean';
+}
+
+function capBatchCount(batchIndices: number[][], limit: number): number[][] {
+  if (batchIndices.length <= limit) return batchIndices;
+
+  const kept = batchIndices.slice(0, limit);
+  const overflow = batchIndices.slice(limit).flat();
+  kept[kept.length - 1] = [...kept[kept.length - 1], ...overflow];
+  return kept;
 }
