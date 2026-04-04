@@ -31,6 +31,10 @@ const translator = new Translator({
   onComplete: () => {
     state = 'done';
     progressBar.complete();
+    const firstTranslation = document.querySelector('.nt-translation');
+    if (firstTranslation) {
+      firstTranslation.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   },
   onError: (error) => {
     progressBar.error(error);
