@@ -34,6 +34,8 @@ export class Translator {
   private cancelled = false;
   private glossary: string[] = [];
   private targetLanguage = 'Simplified Chinese';
+  private completedBatches = 0;
+  private totalBatches = 0;
 
   constructor(private callbacks: TranslatorCallbacks) {}
 
@@ -41,6 +43,8 @@ export class Translator {
     this.cancelled = false;
     this.targetLanguage = targetLanguage;
     this.nextRenderSeq = 0;
+    this.completedBatches = 0;
+    this.totalBatches = 0;
     this.pendingRenders.clear();
 
     const paragraphs = collectParagraphs(container, this.translatedSet);
@@ -98,7 +102,9 @@ export class Translator {
     const batchIndices = splitIntoBatches(uncachedTexts);
 
     const totalBatches = Math.min(batchIndices.length, MAX_BATCHES_PER_TAB);
+    this.totalBatches = totalBatches;
 
+    this.callbacks.onProgress(0, totalBatches);
     this.startKeepalive();
 
     for (let seq = 0; seq < totalBatches; seq++) {
@@ -159,6 +165,9 @@ export class Translator {
           restoreCodePlaceholders(t, batchInfo.codeMaps[i])
         );
 
+        this.completedBatches++;
+        this.callbacks.onProgress(this.completedBatches, this.totalBatches);
+
         this.queueRender(seq, batchInfo.elements, restoredTranslations, totalBatches);
         return;
 
@@ -202,7 +211,6 @@ export class Translator {
       }
 
       this.nextRenderSeq++;
-      this.callbacks.onProgress(this.nextRenderSeq, totalBatches);
     }
 
     if (this.nextRenderSeq >= totalBatches) {
@@ -233,6 +241,8 @@ export class Translator {
     this.batchMap.clear();
     this.pendingRenders.clear();
     this.nextRenderSeq = 0;
+    this.completedBatches = 0;
+    this.totalBatches = 0;
     this.cancelled = false;
     this.glossary = [];
   }

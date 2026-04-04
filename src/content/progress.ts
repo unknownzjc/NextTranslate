@@ -10,7 +10,7 @@ export class ProgressBar {
 
     this.label = document.createElement('span');
     this.label.className = 'nt-progress-label';
-    this.label.textContent = '0/0';
+    this.label.textContent = '翻译中...';
 
     this.container.appendChild(this.label);
     document.body.appendChild(this.container);
@@ -18,7 +18,12 @@ export class ProgressBar {
 
   update(completed: number, total: number) {
     if (!this.label) return;
-    this.label.textContent = `${completed}/${total}`;
+    if (total <= 0) {
+      this.label.textContent = '翻译中...';
+      return;
+    }
+    const pct = Math.round((completed / total) * 100);
+    this.label.textContent = `${completed}/${total} · ${pct}%`;
   }
 
   complete() {
