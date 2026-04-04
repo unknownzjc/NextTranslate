@@ -19,6 +19,16 @@ let mainContainer: Element | null = null;
 const injector = new Injector();
 const progressBar = new ProgressBar();
 
+function scrollToFirstTranslation() {
+  requestAnimationFrame(() => {
+    const container = mainContainer ?? document;
+    const first = container.querySelector('.nt-translation');
+    if (first) {
+      first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  });
+}
+
 const translator = new Translator({
   onBatchTranslated: (_, elements, translations) => {
     for (let i = 0; i < elements.length; i++) {
@@ -31,10 +41,7 @@ const translator = new Translator({
   onComplete: () => {
     state = 'done';
     progressBar.complete();
-    const firstTranslation = document.querySelector('.nt-translation');
-    if (firstTranslation) {
-      firstTranslation.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
+    scrollToFirstTranslation();
   },
   onError: (error) => {
     progressBar.error(error);
@@ -71,6 +78,9 @@ function handleToggle(): ToggleTranslateResponse {
       case 'done':
         translationsVisible = !translationsVisible;
         injector.setVisibility(translationsVisible);
+        if (translationsVisible) {
+          scrollToFirstTranslation();
+        }
         return { action: translationsVisible ? 'toggled_visible' : 'toggled_hidden' };
     }
   } finally {
