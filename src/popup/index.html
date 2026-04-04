@@ -23,6 +23,16 @@
       <h2>翻译设置</h2>
 
       <label>
+        <span>服务商</span>
+        <select id="provider-preset">
+          <option value="openai">OpenAI</option>
+          <option value="zhipu">智谱 AI</option>
+          <option value="kimi">Kimi (Moonshot)</option>
+          <option value="custom">自定义 (OpenAI 兼容)</option>
+        </select>
+      </label>
+
+      <label id="endpoint-label">
         <span>API Endpoint</span>
         <input type="text" id="endpoint" placeholder="https://api.openai.com/v1" spellcheck="false">
       </label>

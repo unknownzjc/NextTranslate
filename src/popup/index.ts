@@ -4,9 +4,22 @@ import type { ToggleTranslateResponse, TranslateStatusMsg, TestConnectionResult 
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 
+interface ProviderPreset {
+  endpoint: string;
+  model: string;
+}
+
+const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
+  openai: { endpoint: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  zhipu: { endpoint: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
+  kimi: { endpoint: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
+};
+
 const translateBtn = $<HTMLButtonElement>('#translate-btn');
 const saveBtn = $<HTMLButtonElement>('#save-btn');
 const testBtn = $<HTMLButtonElement>('#test-btn');
+const providerSelect = $<HTMLSelectElement>('#provider-preset');
+const endpointLabel = $<HTMLLabelElement>('#endpoint-label');
 const endpointInput = $<HTMLInputElement>('#endpoint');
 const apiKeyInput = $<HTMLInputElement>('#api-key');
 const modelInput = $<HTMLInputElement>('#model');
@@ -27,6 +40,11 @@ async function init() {
   modelInput.value = currentConfig.model;
   targetLangSelect.value = currentConfig.targetLanguage;
 
+  // Detect which provider preset matches the current endpoint
+  const detectedProvider = detectProvider(currentConfig.endpoint);
+  providerSelect.value = detectedProvider;
+  updateEndpointVisibility(detectedProvider);
+
   updateTranslateButton();
 
   // Check if endpoint permission is missing (e.g., popup closed during permission dialog)
@@ -37,6 +55,33 @@ async function init() {
   await queryCurrentStatus();
 }
 
+function detectProvider(endpoint: string): string {
+  for (const [key, preset] of Object.entries(PROVIDER_PRESETS)) {
+    if (endpoint === preset.endpoint) return key;
+  }
+  return endpoint ? 'custom' : 'openai';
+}
+
+function updateEndpointVisibility(provider: string) {
+  endpointLabel.classList.toggle('hidden', provider !== 'custom');
+}
+
+// Provider preset change
+providerSelect.addEventListener('change', () => {
+  const provider = providerSelect.value;
+  const preset = PROVIDER_PRESETS[provider];
+
+  if (preset) {
+    endpointInput.value = preset.endpoint;
+    modelInput.value = preset.model;
+  } else {
+    endpointInput.value = '';
+    modelInput.value = '';
+  }
+
+  updateEndpointVisibility(provider);
+});
+
 function updateTranslateButton() {
   const configured = isProviderConfigured(currentConfig);
   translateBtn.disabled = !configured;
@@ -45,8 +90,11 @@ function updateTranslateButton() {
 
 // Save settings
 saveBtn.addEventListener('click', async () => {
+  const provider = providerSelect.value;
+  const preset = PROVIDER_PRESETS[provider];
+
   const newConfig: Partial<ProviderConfig> = {
-    endpoint: endpointInput.value.trim(),
+    endpoint: preset ? preset.endpoint : endpointInput.value.trim(),
     apiKey: apiKeyInput.value.trim(),
     model: modelInput.value.trim(),
     targetLanguage: targetLangSelect.value,
