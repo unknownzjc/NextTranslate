@@ -238,11 +238,12 @@ function updateStatusUI(status: TranslateStatusMsg) {
 
   switch (status.status) {
     case 'translating':
-      if (status.progress) {
-        const pct = Math.round((status.progress.completed / status.progress.total) * 100);
-        statusBar.textContent = `翻译中... ${pct}%`;
-        statusBar.className = 'translating';
+      if (status.progress?.total) {
+        statusBar.textContent = `翻译中... ${status.progress.completed}/${status.progress.total}`;
+      } else {
+        statusBar.textContent = '翻译中...';
       }
+      statusBar.className = 'translating';
       translateBtn.textContent = '取消翻译';
       break;
     case 'done':

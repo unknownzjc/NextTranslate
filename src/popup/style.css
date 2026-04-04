@@ -112,6 +112,9 @@ h2 {
   padding: 6px 10px;
   border-radius: 4px;
   font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 #test-result.success { background: #e8f5e9; color: #2e7d32; }
 #test-result.error { background: #fce4ec; color: #c62828; }

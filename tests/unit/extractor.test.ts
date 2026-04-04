@@ -113,6 +113,14 @@ describe('extractTextWithCodeProtection', () => {
     expect(text).toBe('Simple paragraph without code');
     expect(codeMap.size).toBe(0);
   });
+
+  it('提取时忽略已注入的译文节点', () => {
+    const p = document.createElement('p');
+    p.innerHTML = 'Original text <span class="nt-translation" data-nt>翻译内容</span>';
+    const { text, codeMap } = extractTextWithCodeProtection(p);
+    expect(text.trim()).toBe('Original text');
+    expect(codeMap.size).toBe(0);
+  });
 });
 
 describe('restoreCodePlaceholders', () => {

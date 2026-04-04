@@ -1,6 +1,10 @@
-// Elements whose parent has strict child constraints (e.g. <tr> only allows <td>/<th>).
-// Translation must be appended inside these elements rather than inserted as a sibling.
-const APPEND_INSIDE_TAGS = new Set(['TD', 'TH', 'LI', 'DD', 'DT', 'FIGCAPTION']);
+// Append inside the source element for most translated blocks to reduce sibling layout churn.
+const APPEND_INSIDE_TAGS = new Set([
+  'P',
+  'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+  'LI', 'BLOCKQUOTE', 'TD', 'TH', 'FIGCAPTION', 'DT', 'DD',
+  'DIV', 'LABEL', 'ARTICLE', 'SECTION', 'MAIN', 'ASIDE',
+]);
 
 const LANG_MAP: Record<string, string> = {
   'Simplified Chinese': 'zh-CN',
@@ -16,6 +20,7 @@ export class Injector {
   private translationElements = new Set<HTMLElement>();
   private theme: 'light' | 'dark' = 'light';
   private targetLanguage = 'Simplified Chinese';
+  private visible = true;
 
   setTargetLanguage(lang: string) {
     this.targetLanguage = lang;
@@ -44,43 +49,26 @@ export class Injector {
       sourceEl.setAttribute('data-nt-id', ntId);
     }
 
-    let translationDiv: HTMLElement | null = null;
-    const isAppendInside = APPEND_INSIDE_TAGS.has(sourceEl.tagName);
+    let translationEl = this.findExistingTranslation(sourceEl, ntId);
 
-    if (isAppendInside) {
-      // For append-inside elements, check last child
-      const lastChild = sourceEl.lastElementChild;
-      if (lastChild?.classList.contains('nt-translation') &&
-          lastChild.getAttribute('data-nt-id') === ntId) {
-        translationDiv = lastChild as HTMLElement;
-      }
-    } else {
-      const nextSibling = sourceEl.nextElementSibling;
-      if (nextSibling?.classList.contains('nt-translation') &&
-          nextSibling.getAttribute('data-nt-id') === ntId) {
-        translationDiv = nextSibling as HTMLElement;
-      }
-    }
+    if (!translationEl) {
+      translationEl = document.createElement('span');
+      translationEl.className = 'nt-translation';
+      translationEl.setAttribute('data-nt', '');
+      translationEl.setAttribute('data-nt-id', ntId);
+      translationEl.setAttribute('data-nt-theme', this.theme);
+      translationEl.setAttribute('lang', LANG_MAP[this.targetLanguage] ?? 'zh-CN');
+      translationEl.style.display = this.visible ? '' : 'none';
 
-    if (!translationDiv) {
-      translationDiv = document.createElement('div');
-      translationDiv.className = 'nt-translation';
-      translationDiv.setAttribute('data-nt', '');
-      translationDiv.setAttribute('data-nt-id', ntId);
-      translationDiv.setAttribute('data-nt-theme', this.theme);
-      translationDiv.setAttribute('lang', LANG_MAP[this.targetLanguage] ?? 'zh-CN');
-
-      if (APPEND_INSIDE_TAGS.has(sourceEl.tagName)) {
-        // Append inside to avoid breaking parent structure (e.g. <tr>, <ul>)
-        sourceEl.appendChild(translationDiv);
+      if (shouldAppendInside(sourceEl)) {
+        sourceEl.appendChild(translationEl);
       } else {
-        sourceEl.parentNode?.insertBefore(translationDiv, sourceEl.nextSibling);
+        sourceEl.parentNode?.insertBefore(translationEl, sourceEl.nextSibling);
       }
-      this.translationElements.add(translationDiv);
+      this.translationElements.add(translationEl);
     }
 
-    // Use textContent (XSS safe)
-    translationDiv.textContent = translatedText;
+    translationEl.textContent = translatedText;
 
     this.translationMap.set(ntId, {
       sourceEl: new WeakRef(sourceEl),
@@ -89,6 +77,9 @@ export class Injector {
   }
 
   setVisibility(visible: boolean) {
+    this.visible = visible;
+    this.pruneDetachedTranslations();
+
     for (const el of this.translationElements) {
       el.style.display = visible ? '' : 'none';
     }
@@ -99,6 +90,8 @@ export class Injector {
   }
 
   removeAll() {
+    this.pruneDetachedTranslations();
+
     for (const el of this.translationElements) {
       el.remove();
     }
@@ -111,28 +104,44 @@ export class Injector {
     });
   }
 
-  restoreRemovedTranslations() {
-    for (const [ntId, data] of this.translationMap) {
-      const sourceEl = data.sourceEl.deref();
-      if (!sourceEl || !sourceEl.isConnected) continue;
+  restoreTranslationById(ntId: string): boolean {
+    const data = this.translationMap.get(ntId);
+    const sourceEl = data?.sourceEl.deref();
+    if (!data || !sourceEl || !sourceEl.isConnected) return false;
 
-      if (APPEND_INSIDE_TAGS.has(sourceEl.tagName)) {
-        const lastChild = sourceEl.lastElementChild;
-        if (lastChild?.classList.contains('nt-translation') &&
-            lastChild.getAttribute('data-nt-id') === ntId) {
-          continue;
-        }
-      } else {
-        const existing = sourceEl.nextElementSibling;
-        if (existing?.classList.contains('nt-translation') &&
-            existing.getAttribute('data-nt-id') === ntId) {
-          continue;
-        }
+    this.insertTranslation(sourceEl, data.translatedText);
+    return true;
+  }
+
+  getSourceElementByTranslationId(ntId: string): Element | null {
+    return this.translationMap.get(ntId)?.sourceEl.deref() ?? null;
+  }
+
+  private findExistingTranslation(sourceEl: Element, ntId: string): HTMLElement | null {
+    if (shouldAppendInside(sourceEl)) {
+      const existing = sourceEl.querySelector(`:scope > .nt-translation[data-nt-id="${CSS.escape(ntId)}"]`);
+      return existing instanceof HTMLElement ? existing : null;
+    }
+
+    const nextSibling = sourceEl.nextElementSibling;
+    if (nextSibling?.classList.contains('nt-translation') && nextSibling.getAttribute('data-nt-id') === ntId) {
+      return nextSibling as HTMLElement;
+    }
+
+    return null;
+  }
+
+  private pruneDetachedTranslations() {
+    for (const el of this.translationElements) {
+      if (!el.isConnected) {
+        this.translationElements.delete(el);
       }
-
-      this.insertTranslation(sourceEl, data.translatedText);
     }
   }
+}
+
+function shouldAppendInside(sourceEl: Element): boolean {
+  return APPEND_INSIDE_TAGS.has(sourceEl.tagName) || sourceEl.tagName.includes('-');
 }
 
 function parseAlpha(color: string): number {
