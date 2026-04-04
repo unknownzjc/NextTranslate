@@ -1,4 +1,5 @@
 import Defuddle from 'defuddle';
+import { getSiteCompat, type SiteCompat } from './compat';
 
 // --- Constants ---
 
@@ -23,7 +24,7 @@ export function isChineseDominant(text: string): boolean {
 
 // --- Element filtering ---
 
-export function shouldSkipElement(el: Element): boolean {
+export function shouldSkipElement(el: Element, compat?: SiteCompat): boolean {
   if (el.className && typeof el.className === 'string' && el.className.split(' ').some(c => c.startsWith('nt-'))) {
     return true;
   }
@@ -31,6 +32,9 @@ export function shouldSkipElement(el: Element): boolean {
   if (el.getAttribute('aria-hidden') === 'true') return true;
   if (isHidden(el)) return true;
   if (el.closest('nav, [role="navigation"]')) return true;
+
+  // Site-specific skip rules
+  if (compat?.shouldSkip?.(el)) return true;
 
   const text = (el.textContent ?? '').replace(/\s/g, '');
   if (text.length < MIN_TEXT_LENGTH) return true;
@@ -215,6 +219,13 @@ export interface ExtractedParagraph {
 }
 
 export async function findMainContainer(): Promise<Element> {
+  // Try site-specific container selector first
+  const compat = getSiteCompat(location.hostname);
+  if (compat.containerSelector) {
+    const container = document.querySelector(compat.containerSelector);
+    if (container) return container;
+  }
+
   try {
     const result = await Promise.race([
       new Promise<{ content: string; debug?: { contentSelector?: string } }>((resolve) => {
@@ -284,14 +295,35 @@ function hasTranslatableDescendantParagraph(el: Element): boolean {
 }
 
 export function collectParagraphs(container: Element, translatedSet: Set<Element>): ExtractedParagraph[] {
+  const compat = getSiteCompat(location.hostname);
+  const effectiveParagraphTags = compat.extraParagraphTags
+    ? new Set([...PARAGRAPH_TAGS, ...compat.extraParagraphTags])
+    : PARAGRAPH_TAGS;
   const paragraphs: ExtractedParagraph[] = [];
   const visited = new Set<Element>();
 
+  // Collect elements matched by site-specific paragraph selectors first
+  if (compat.paragraphSelector) {
+    const selectorMatches = container.querySelectorAll(compat.paragraphSelector);
+    for (const el of selectorMatches) {
+      if (visited.has(el)) continue;
+      if (translatedSet.has(el)) continue;
+      if (shouldSkipElement(el, compat)) continue;
+
+      visited.add(el);
+      const { text, codeMap } = extractTextWithCodeProtection(el);
+      const trimmed = text.trim();
+      if (trimmed.length >= MIN_TEXT_LENGTH && trimmed.length <= MAX_TEXT_LENGTH) {
+        paragraphs.push({ element: el, text: trimmed, codeMap });
+      }
+    }
+  }
+
   function walk(el: Element) {
-    if (shouldSkipElement(el)) return;
+    if (shouldSkipElement(el, compat)) return;
     if (translatedSet.has(el)) return;
 
-    if (PARAGRAPH_TAGS.has(el.tagName)) {
+    if (effectiveParagraphTags.has(el.tagName)) {
       // Skip navigation-like elements (high link density)
       if (isLinkHeavy(el)) return;
 
