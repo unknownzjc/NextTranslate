@@ -26,13 +26,9 @@ vi.stubGlobal('chrome', {
     sync: createStorageArea(() => mockStorage.sync),
     local: createStorageArea(() => mockStorage.local),
   },
-  permissions: {
-    request: vi.fn(() => Promise.resolve(true)),
-    remove: vi.fn(() => Promise.resolve(true)),
-  },
 });
 
-import { loadProviderConfig, saveProviderConfig, requestEndpointPermission } from '@shared/storage';
+import { loadProviderConfig, saveProviderConfig } from '@shared/storage';
 import { DEFAULT_PROVIDER_CONFIG } from '@shared/types';
 
 describe('storage', () => {
@@ -65,11 +61,4 @@ describe('storage', () => {
     expect(config.endpoint).toBe('https://api.openai.com/v1');
   });
 
-  it('requestEndpointPermission 请求正确的 origin 权限', async () => {
-    const granted = await requestEndpointPermission('https://api.deepseek.com/v1');
-    expect(granted).toBe(true);
-    expect(chrome.permissions.request).toHaveBeenCalledWith({
-      origins: ['https://api.deepseek.com/*'],
-    });
-  });
 });

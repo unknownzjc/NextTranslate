@@ -51,29 +51,6 @@ export async function saveProviderConfig(config: Partial<ProviderConfig>): Promi
   await Promise.all(promises);
 }
 
-export async function requestEndpointPermission(endpoint: string): Promise<boolean> {
-  const url = new URL(endpoint);
-  const origin = `${url.protocol}//${url.host}/*`;
-  return chrome.permissions.request({ origins: [origin] });
-}
-
-export async function removeEndpointPermission(endpoint: string): Promise<boolean> {
-  const url = new URL(endpoint);
-  const origin = `${url.protocol}//${url.host}/*`;
-  return chrome.permissions.remove({ origins: [origin] });
-}
-
 export function isProviderConfigured(config: ProviderConfig): boolean {
   return config.endpoint !== '' && config.apiKey !== '' && config.model !== '';
-}
-
-export async function hasEndpointPermission(endpoint: string): Promise<boolean> {
-  if (!endpoint) return false;
-  try {
-    const url = new URL(endpoint);
-    const origin = `${url.protocol}//${url.host}/*`;
-    return chrome.permissions.contains({ origins: [origin] });
-  } catch {
-    return false;
-  }
 }
