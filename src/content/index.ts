@@ -21,13 +21,40 @@ const injector = new Injector();
 const progressBar = new ProgressBar();
 
 function scrollToFirstTranslation() {
-  requestAnimationFrame(() => {
+  // Delay to let frameworks (React on X.com) finish re-rendering after DOM insertions
+  setTimeout(() => {
     const container = mainContainer ?? document;
     const first = container.querySelector('.nt-translation');
-    if (first) {
-      first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (!first) return;
+
+    // Find the nearest scrollable ancestor to scroll directly
+    const scrollable = findScrollableAncestor(first);
+    if (!scrollable) return;
+
+    const rect = first.getBoundingClientRect();
+    const viewportHeight = scrollable === document.documentElement
+      ? window.innerHeight
+      : scrollable.clientHeight;
+
+    // Scroll to center the element in the viewport
+    const offset = rect.top - viewportHeight / 2 + rect.height / 2;
+    scrollable.scrollBy({ top: offset, behavior: 'smooth' });
+  }, 100);
+}
+
+function findScrollableAncestor(el: Element): Element | null {
+  let current = el.parentElement;
+  while (current && current !== document.documentElement) {
+    const { overflowY } = getComputedStyle(current);
+    if ((overflowY === 'auto' || overflowY === 'scroll') && current.scrollHeight > current.clientHeight) {
+      return current;
     }
-  });
+    current = current.parentElement;
+  }
+  if (document.documentElement.scrollHeight > document.documentElement.clientHeight) {
+    return document.documentElement;
+  }
+  return null;
 }
 
 const translator = new Translator({
