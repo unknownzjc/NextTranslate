@@ -158,6 +158,38 @@ function isGitHubLeafLike(el: Element): boolean {
   ].join(', '));
 }
 
+function getGitHubRepoSidebarRow(el: Element): Element | null {
+  const row = el.closest('.BorderGrid-row');
+  if (!row) return null;
+  if (!row.closest('[data-partial-name="codeViewRepoRoute.Sidebar"], .prc-PageLayout-PaneWrapper-pHPop[data-position="end"]')) {
+    return null;
+  }
+  return row;
+}
+
+function getGitHubRepoSidebarSectionName(el: Element): string | null {
+  const row = getGitHubRepoSidebarRow(el);
+  if (!row) return null;
+
+  const heading = row.querySelector('h2');
+  if (!heading) return null;
+
+  return (heading.textContent ?? '')
+    .replace(/\d+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function isGitHubRepoAboutText(el: Element): boolean {
+  const row = getGitHubRepoSidebarRow(el);
+  if (!row) return false;
+  if (getGitHubRepoSidebarSectionName(el) !== 'about') return false;
+
+  const description = row.querySelector('p.f4, p');
+  return el.matches('h2') || description === el;
+}
+
 const githubCompat: SiteCompat = {
   containerSelector: '#repo-content-turbo-frame, .repository-content, .js-issue-title + *, [data-target="readme-toc.content"], .comment-body, #diff-comparison-viewer-container',
   paragraphSelector: [
@@ -174,14 +206,15 @@ const githubCompat: SiteCompat = {
     if (el.matches('h1[data-component="PH_Title"]')) return true;
 
     // Skip GitHub chrome, sidebars, tabs, and header metadata.
-    if (el.closest('.AppHeader, .pagehead, .UnderlineNav, .subnav, .tabnav, .reponav')) return true;
+    if (el.closest('.AppHeader, .pagehead, .UnderlineNav, .subnav, .tabnav, .reponav, .pagehead-actions, #repository-details-container')) return true;
     if (el.closest('.BorderGrid--spacious .BorderGrid-cell:last-child')) return true;
     if (el.closest('.prc-PageLayout-SidebarWrapper-kLG4B, .prc-PageLayout-Sidebar-iciWg, .discussion-sidebar, .discussion-sidebar-item, .js-discussion-sidebar-item, .pull-discussion-sidebar, .sidebar-assignee, .sidebar-reviewers, .js-issue-sidebar-form')) return true;
+    if (getGitHubRepoSidebarSectionName(el) && !isGitHubRepoAboutText(el) && isGitHubLeafLike(el)) return true;
     if (el.closest('[aria-label="Pull request navigation tabs"], [role="tablist"]')) return true;
     if (el.closest('.prc-PageHeader-Description-w-ejP')) return true;
 
-    // Skip file tree, code blocks, breadcrumbs.
-    if (el.closest('.react-directory-filename-column, .file-navigation, nav[aria-label="Breadcrumb"]')) return true;
+    // Skip repo file lists / trees, code blocks, breadcrumbs.
+    if (el.closest('[aria-labelledby="folders-and-files"], .react-directory-filename-column, .file-navigation, nav[aria-label="Breadcrumb"]')) return true;
     if (el.closest('.js-file-line, .blob-code, .highlight')) return true;
     if (el.closest('.email-hidden-reply, .email-hidden-toggle, .email-quoted-reply')) return true;
 
@@ -190,7 +223,7 @@ const githubCompat: SiteCompat = {
     if (el.closest('.btn, .BtnGroup, .social-count, .starring-container')) return true;
 
     // Skip UI headings outside markdown content; title is handled by paragraphSelector.
-    if (/^H[1-6]$/.test(tag) && !el.closest('.markdown-body, .comment-body, .email-fragment, [data-listview-item-title-container], h1[data-component="PH_Title"]')) {
+    if (/^H[1-6]$/.test(tag) && !el.closest('.markdown-body, .comment-body, .email-fragment, [data-listview-item-title-container], h1[data-component="PH_Title"]') && !isGitHubRepoAboutText(el)) {
       return true;
     }
 
