@@ -208,8 +208,12 @@ function getTranslationHost(sourceEl: Element): Element {
     return sourceEl.parentElement ?? sourceEl;
   }
 
-  if (sourceEl.matches('bdi[data-testid="issue-title"]')) {
+  if (sourceEl.matches('bdi[data-testid="issue-title"], h1[data-component="PH_Title"] > span.markdown-title')) {
     return sourceEl.closest('h1[data-component="PH_Title"]') ?? sourceEl.parentElement ?? sourceEl;
+  }
+
+  if (sourceEl.matches('a.markdown-title[href*="/pull/"]')) {
+    return ensureGitHubPullListTitleHost(sourceEl);
   }
 
   return sourceEl;
@@ -217,6 +221,38 @@ function getTranslationHost(sourceEl: Element): Element {
 
 function getDotsHost(sourceEl: Element): Element {
   return getTranslationHost(sourceEl);
+}
+
+function ensureGitHubPullListTitleHost(sourceEl: Element): Element {
+  const existingHost = sourceEl.closest('.nt-github-pr-title-line');
+  if (existingHost) return existingHost;
+
+  const parent = sourceEl.parentElement;
+  if (!parent) return sourceEl;
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'nt-github-pr-title-line';
+  parent.insertBefore(wrapper, sourceEl);
+
+  let current: ChildNode | null = sourceEl;
+  while (current) {
+    const next: ChildNode | null = current.nextSibling;
+
+    if (current instanceof HTMLElement && shouldStopPullTitleGrouping(current)) {
+      break;
+    }
+
+    wrapper.appendChild(current);
+    current = next;
+  }
+
+  return wrapper;
+}
+
+function shouldStopPullTitleGrouping(el: HTMLElement): boolean {
+  if (el.classList.contains('nt-github-pr-title-line')) return false;
+  if (el.matches('div, p, ul, ol, dl, table, section, article, aside, nav')) return true;
+  return false;
 }
 
 function parseAlpha(color: string): number {

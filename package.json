@@ -10,6 +10,7 @@
     "build:content": "vite build --config vite.config.content.ts && cp src/content/style.css dist/content/style.css",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "npm run build && vitest run --config vitest.e2e.config.ts",
     "mock-api": "npx tsx tests/e2e/mock-server.ts"
   },
   "dependencies": {
@@ -18,6 +19,7 @@
   "devDependencies": {
     "@types/chrome": "^0.1.38",
     "happy-dom": "^20.8.9",
+    "puppeteer": "^24.40.0",
     "typescript": "^6.0.2",
     "vite": "^8.0.3",
     "vitest": "^4.1.2"

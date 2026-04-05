@@ -138,6 +138,14 @@ function isGitHubIssueListPage(pathname: string): boolean {
   return /^\/[^/]+\/[^/]+\/issues\/?$/.test(pathname);
 }
 
+function isGitHubPullListPage(pathname: string): boolean {
+  return /^\/[^/]+\/[^/]+\/pulls\/?$/.test(pathname);
+}
+
+function isGitHubListPage(pathname: string): boolean {
+  return isGitHubIssueListPage(pathname) || isGitHubPullListPage(pathname);
+}
+
 function isGitHubAttachmentText(text: string): boolean {
   return /^[\w .()/-]+\.(?:json|txt|log|png|jpe?g|gif|webp|svg|pdf|zip|tar|gz|tgz|bz2|7z|csv)$/i.test(text);
 }
@@ -151,37 +159,59 @@ function isGitHubReactionNotice(text: string): boolean {
 }
 
 function isGitHubLeafLike(el: Element): boolean {
-  return el.children.length === 0 || el.matches('p, li, td, th, .email-fragment, [data-listview-item-title-container] > h3, bdi[data-testid="issue-title"]');
+  return el.children.length === 0 || el.matches([
+    'p',
+    'li',
+    'td',
+    'th',
+    '.email-fragment',
+    '[data-listview-item-title-container] > h3',
+    'bdi[data-testid="issue-title"]',
+    'a.markdown-title[href*="/pull/"]',
+    'h1[data-component="PH_Title"] > span.markdown-title',
+  ].join(', '));
 }
 
 const githubCompat: SiteCompat = {
-  containerSelector: '.repository-content, .js-issue-title + *, [data-target="readme-toc.content"], .comment-body, #repo-content-turbo-frame',
+  containerSelector: '#repo-content-turbo-frame, .repository-content, .js-issue-title + *, [data-target="readme-toc.content"], .comment-body, #diff-comparison-viewer-container',
   paragraphSelector: [
     '[data-listview-item-title-container] > h3',
     'bdi[data-testid="issue-title"]',
+    'h1[data-component="PH_Title"] > span.markdown-title',
+    'a.markdown-title[href*="/pull/"]',
     '.email-fragment',
   ].join(', '),
-  paragraphSelectorOnly: (pathname: string) => isGitHubIssueListPage(pathname),
+  paragraphSelectorOnly: (pathname: string) => isGitHubListPage(pathname),
   shouldSkip(el: Element): boolean {
     const tag = el.tagName;
     if (tag === 'svg' || tag === 'PRE' || tag === 'CODE') return true;
     if (el.matches('h1[data-component="PH_Title"]')) return true;
-    // Skip file tree, code blocks, breadcrumbs
+
+    // Skip GitHub chrome, sidebars, tabs, and header metadata.
+    if (el.closest('.AppHeader, .pagehead, .UnderlineNav, .subnav, .tabnav, .reponav')) return true;
+    if (el.closest('.BorderGrid--spacious .BorderGrid-cell:last-child')) return true;
+    if (el.closest('.prc-PageLayout-SidebarWrapper-kLG4B, .prc-PageLayout-Sidebar-iciWg, .discussion-sidebar, .discussion-sidebar-item, .js-discussion-sidebar-item, .pull-discussion-sidebar, .sidebar-assignee, .sidebar-reviewers, .js-issue-sidebar-form')) return true;
+    if (el.closest('[aria-label="Pull request navigation tabs"], [role="tablist"]')) return true;
+    if (el.closest('.prc-PageHeader-Description-w-ejP')) return true;
+
+    // Skip file tree, code blocks, breadcrumbs.
     if (el.closest('.react-directory-filename-column, .file-navigation, nav[aria-label="Breadcrumb"]')) return true;
     if (el.closest('.js-file-line, .blob-code, .highlight')) return true;
     if (el.closest('.email-hidden-reply, .email-hidden-toggle, .email-quoted-reply')) return true;
-    // Skip navigation and sidebar
-    if (el.closest('.AppHeader, .pagehead, .UnderlineNav, .subnav, .tabnav, .reponav')) return true;
-    if (el.closest('.BorderGrid--spacious .BorderGrid-cell:last-child')) return true;
-    // Skip commit info, counters, labels
+
+    // Skip commit info, counters, labels, actions.
     if (el.closest('.commit-tease, .Counter, .IssueLabel, .label-link, .topic-tag')) return true;
-    // Skip actions/buttons
     if (el.closest('.btn, .BtnGroup, .social-count, .starring-container')) return true;
-    // GitHub path or filename patterns
+
+    // Skip UI headings outside markdown content; title is handled by paragraphSelector.
+    if (/^H[1-6]$/.test(tag) && !el.closest('.markdown-body, .comment-body, .email-fragment, [data-listview-item-title-container], h1[data-component="PH_Title"]')) {
+      return true;
+    }
+
     const text = (el.textContent ?? '').trim();
     if (isGitHubLeafLike(el)) {
       if (/^[a-f0-9]{7,40}$/.test(text)) return true; // commit hash
-      if (/^#\d+$/.test(text)) return true; // issue number
+      if (/^#\d+$/.test(text)) return true; // issue / PR number
       if (/^[\w./-]+\.(js|ts|tsx|jsx|py|go|rs|rb|java|c|cpp|h|css|html|md|json|yml|yaml|toml|lock|sh|sql)$/i.test(text)) return true;
       if (isGitHubAttachmentText(text)) return true;
       if (isGitHubMetadataLine(text)) return true;

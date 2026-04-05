@@ -47,11 +47,16 @@ function isHidden(el: Element): boolean {
   if (el.tagName === 'TEMPLATE') return true;
 
   if (el instanceof HTMLElement) {
+    const style = getComputedStyle(el);
+
+    if (style.display === 'contents') {
+      return false;
+    }
+
     if (el.offsetParent === null) {
       if (el.parentElement === document.body || el === document.body) return false;
-      const position = getComputedStyle(el).position;
+      const position = style.position;
       if (position === 'fixed' || position === 'sticky') {
-        const style = getComputedStyle(el);
         return style.display === 'none' || style.visibility === 'hidden';
       }
       return true;
@@ -219,11 +224,19 @@ export interface ExtractedParagraph {
   codeMap: Map<string, string>;
 }
 
+function querySelectorInOrder(selectorList: string): Element | null {
+  for (const selector of selectorList.split(',').map(part => part.trim()).filter(Boolean)) {
+    const match = document.querySelector(selector);
+    if (match) return match;
+  }
+  return null;
+}
+
 export async function findMainContainer(): Promise<Element> {
-  // Try site-specific container selector first
+  // Try site-specific container selector first, preserving selector priority.
   const compat = getSiteCompat(location.hostname);
   if (compat.containerSelector) {
-    const container = document.querySelector(compat.containerSelector);
+    const container = querySelectorInOrder(compat.containerSelector);
     if (container) return container;
   }
 
