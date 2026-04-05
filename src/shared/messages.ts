@@ -31,6 +31,7 @@ export type TranslateBatchResult = {
   batchId: string;
   translations: string[];
   error?: string;
+  cancelled?: boolean;
 };
 
 // Background → Popup (broadcast)

@@ -50,4 +50,41 @@ describe('Translator incremental re-render handling', () => {
     expect(translator.hasPendingWork(container, { shouldSkipElement: () => true })).toBe(false);
     expect(translator.hasPendingWork(container, { shouldSkipElement: () => false })).toBe(true);
   });
+
+  it('后台返回 cancelled 时会重试同一批次，而不是永久卡住', async () => {
+    vi.useFakeTimers();
+
+    document.body.innerHTML = '<main><p id="p1">Hello world from retry test.</p></main>';
+    const sendMessage = vi.fn()
+      .mockResolvedValueOnce({ batchId: 'b1', translations: [], cancelled: true })
+      .mockResolvedValueOnce({ batchId: 'b1', translations: ['取消后重试成功'] });
+
+    vi.stubGlobal('chrome', {
+      runtime: {
+        id: 'test-extension',
+        sendMessage,
+      },
+    });
+
+    const translated: string[] = [];
+    const translator = new Translator({
+      onBatchTranslated: (_batchSeq, _elements, translations) => {
+        translated.push(...translations);
+      },
+      onProgress: () => {},
+      onComplete: () => {},
+      onError: () => {},
+      onCancelled: () => {},
+    });
+
+    void translator.start(document.querySelector('main')!, 'Simplified Chinese');
+    await Promise.resolve();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+
+    await vi.runOnlyPendingTimersAsync();
+    await Promise.resolve();
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(translated).toContain('取消后重试成功');
+  });
 });

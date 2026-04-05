@@ -171,7 +171,17 @@ export class Injector {
     const ntId = sourceEl.getAttribute('data-nt-id');
     if (!ntId) return false;
 
-    return this.findExistingTranslation(sourceEl, ntId) !== null;
+    const hostEl = getExistingTranslationHost(sourceEl);
+    if (shouldAppendInside(hostEl)) {
+      const existing = hostEl.querySelector(`:scope > .nt-translation[data-nt-id="${CSS.escape(ntId)}"]`);
+      return existing instanceof HTMLElement;
+    }
+
+    const nextSibling = hostEl.nextElementSibling;
+    return Boolean(
+      nextSibling?.classList.contains('nt-translation')
+        && nextSibling.getAttribute('data-nt-id') === ntId,
+    );
   }
 
   private findExistingTranslation(sourceEl: Element, ntId: string): HTMLElement | null {
@@ -221,6 +231,22 @@ function getTranslationHost(sourceEl: Element): Element {
 
 function getDotsHost(sourceEl: Element): Element {
   return getTranslationHost(sourceEl);
+}
+
+function getExistingTranslationHost(sourceEl: Element): Element {
+  if (sourceEl.matches('[data-listview-item-title-container] > h3')) {
+    return sourceEl.parentElement ?? sourceEl;
+  }
+
+  if (sourceEl.matches('bdi[data-testid="issue-title"], h1[data-component="PH_Title"] > span.markdown-title')) {
+    return sourceEl.closest('h1[data-component="PH_Title"]') ?? sourceEl.parentElement ?? sourceEl;
+  }
+
+  if (sourceEl.matches('a.markdown-title[href*="/pull/"]')) {
+    return sourceEl.closest('.nt-github-pr-title-line') ?? sourceEl.parentElement ?? sourceEl;
+  }
+
+  return sourceEl;
 }
 
 function ensureGitHubPullListTitleHost(sourceEl: Element): Element {
