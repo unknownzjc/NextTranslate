@@ -2,7 +2,7 @@ import type { ToggleTranslateResponse, TranslateStatusMsg } from '@shared/messag
 import { CONTENT_SCRIPT_READY_KEY } from '@shared/content-ui';
 import { isProviderConfigured, loadProviderConfig } from '@shared/storage';
 import type { ProviderConfig } from '@shared/types';
-import { findMainContainer } from './extractor';
+import { collectParagraphs, findMainContainer } from './extractor';
 import { getMainDomain } from './compat';
 import { Translator } from './translator';
 import { Injector } from './injector';
@@ -25,6 +25,7 @@ let toggleBusy = false;
 let mutationObserver: MutationObserver | null = null;
 let domWorkTimer: ReturnType<typeof setTimeout> | null = null;
 let scrollIdleTimer: ReturnType<typeof setTimeout> | null = null;
+let viewportQueueFrame: number | null = null;
 let mainContainer: Element | null = null;
 let pendingIncrementalTranslation = false;
 let pendingNewContent = false;
@@ -50,7 +51,7 @@ function syncFloatingBallState() {
   clearFloatingBallErrorTimer();
 
   if (state === 'translating') {
-    floatingBall.setState({ mode: 'translating', progress: latestProgress });
+    floatingBall.setState({ mode: 'translating' });
     return;
   }
 
@@ -286,6 +287,41 @@ async function startIncrementalTranslation() {
   return runTranslationPass();
 }
 
+function scheduleViewportQueuePreview() {
+  if (!useViewportLazyTranslation || viewportQueueFrame !== null) return;
+
+  viewportQueueFrame = window.requestAnimationFrame(() => {
+    viewportQueueFrame = null;
+    void primeViewportQueuePreview();
+  });
+}
+
+async function primeViewportQueuePreview() {
+  if (!useViewportLazyTranslation || (state !== 'translating' && state !== 'done')) return;
+
+  const ready = await ensureMainContainerReady();
+  if (!ready || !mainContainer) return;
+
+  const includeElement = getTranslationIncludeElement();
+  if (!includeElement) return;
+
+  const pendingViewportParagraphs = collectParagraphs(
+    mainContainer,
+    (el) => shouldSkipRenderedElement(el),
+    includeElement,
+  );
+
+  if (pendingViewportParagraphs.length === 0) return;
+
+  for (const { element } of pendingViewportParagraphs) {
+    injector.showLoadingPlaceholder(element);
+  }
+
+  if (state === 'translating') {
+    pendingIncrementalTranslation = true;
+  }
+}
+
 function cancelTranslation() {
   state = 'idle';
   pendingIncrementalTranslation = false;
@@ -364,6 +400,10 @@ function handleScroll() {
     scheduleDomWork(0);
   }
 
+  if (useViewportLazyTranslation && (state === 'translating' || state === 'done')) {
+    scheduleViewportQueuePreview();
+  }
+
   if (!pendingNewContent && !useViewportLazyTranslation) return;
 
   isScrollActive = true;
@@ -431,6 +471,10 @@ function stopObserver() {
   if (scrollIdleTimer) {
     clearTimeout(scrollIdleTimer);
     scrollIdleTimer = null;
+  }
+  if (viewportQueueFrame !== null) {
+    cancelAnimationFrame(viewportQueueFrame);
+    viewportQueueFrame = null;
   }
   isScrollActive = false;
 }

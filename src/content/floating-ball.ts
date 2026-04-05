@@ -1,6 +1,6 @@
 export type FloatingBallState =
   | { mode: 'idle' }
-  | { mode: 'translating'; progress?: { completed: number; total: number } }
+  | { mode: 'translating' }
   | { mode: 'translated'; visible: boolean }
   | { mode: 'error'; message: string };
 
@@ -48,7 +48,7 @@ export class FloatingBall {
     let hintText = '翻译全文';
     let title = '快速翻译全文';
     let badgeText = '';
-    let badgeMode: 'none' | 'progress' | 'success' = 'none';
+    let badgeMode: 'none' | 'loading' | 'success' = 'none';
     let stateKey = 'idle';
 
     if (state.mode === 'translating') {
@@ -56,13 +56,8 @@ export class FloatingBall {
       hintText = '翻译中...';
       title = '取消翻译';
       stateKey = 'translating';
-
-      if (state.progress && state.progress.total > 0) {
-        const pct = Math.min(99, Math.max(0, Math.round((state.progress.completed / state.progress.total) * 100)));
-        hintText = `翻译中 ${state.progress.completed}/${state.progress.total}`;
-        badgeMode = 'progress';
-        badgeText = String(pct);
-      }
+      badgeMode = 'loading';
+      badgeText = '...';
     }
 
     if (state.mode === 'translated') {
