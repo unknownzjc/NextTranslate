@@ -79,6 +79,12 @@ async function openPage(url: string): Promise<Page> {
   return page;
 }
 
+async function setAutoTranslateSites(sites: Record<string, boolean>) {
+  await extensionPage.evaluate(async (nextSites: Record<string, boolean>) => {
+    await chrome.storage.sync.set({ 'nt:autoTranslateSites': nextSites });
+  }, sites);
+}
+
 describe.sequential('GitHub PR real e2e', () => {
   beforeAll(async () => {
     server = createMockServer();
@@ -198,5 +204,25 @@ describe.sequential('GitHub PR real e2e', () => {
     expect(state.hasTabsTranslation).toBe(false);
 
     await page.close();
+  });
+
+  it('auto translates configured sites on page load without manual trigger', async () => {
+    await setAutoTranslateSites({ github.com: true });
+    const page = await openPage(GITHUB_PR_LIST_URL);
+
+    await page.waitForSelector('a.markdown-title[href*="/pull/"]', { timeout: 120000 });
+    await page.waitForFunction(() => {
+      const translation = document.querySelector('.nt-github-pr-title-line > .nt-translation');
+      return translation?.textContent?.includes('[翻译]') ?? false;
+    }, { timeout: 120000 });
+
+    const translationText = await page.evaluate(() => {
+      return document.querySelector('.nt-github-pr-title-line > .nt-translation')?.textContent ?? null;
+    });
+
+    expect(translationText).toMatch(/^\[翻译\]/);
+
+    await page.close();
+    await setAutoTranslateSites({});
   });
 });

@@ -1,3 +1,7 @@
+import { getMainDomain } from '@shared/site';
+
+export { getMainDomain };
+
 // --- Site Compatibility Layer ---
 // Provides site-specific overrides for content extraction on major websites.
 // Modeled after FluentRead's compat.ts, adapted for NextTranslate's architecture.
@@ -23,24 +27,6 @@ export interface SiteCompat {
 }
 
 const EMPTY_COMPAT: SiteCompat = {};
-
-// --- Domain utility ---
-
-export function getMainDomain(hostname: string): string {
-  const host = hostname.replace(/^www\./, '');
-  // Normalize Twitter/X
-  if (host === 'twitter.com' || host === 'x.com') return 'x.com';
-  // Handle two-part TLDs
-  const parts = host.split('.');
-  const twoPartTlds = ['co.uk', 'co.jp', 'com.au', 'co.kr', 'co.in', 'com.br', 'co.nz'];
-  if (parts.length >= 3) {
-    const lastTwo = parts.slice(-2).join('.');
-    if (twoPartTlds.includes(lastTwo)) {
-      return parts.slice(-3).join('.');
-    }
-  }
-  return parts.slice(-2).join('.');
-}
 
 // --- Special content detection ---
 

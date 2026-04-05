@@ -1,6 +1,14 @@
-import { loadActiveProviderId, loadProviderConfig, saveProviderConfig, isProviderConfigured } from '@shared/storage';
+import {
+  isProviderConfigured,
+  loadActiveProviderId,
+  loadProviderConfig,
+  loadSiteTranslationSettings,
+  saveProviderConfig,
+  saveSiteTranslationSettings,
+} from '@shared/storage';
 import { ensureContentUiInjected } from '@shared/content-ui';
 import { PROVIDER_PRESETS, type ProviderId } from '@shared/providers';
+import { getSiteKeyFromUrl, isInjectablePageUrl } from '@shared/site';
 import type { ProviderConfig } from '@shared/types';
 import type { ToggleTranslateResponse, TranslateStatusMsg, TestConnectionResult } from '@shared/messages';
 
@@ -18,14 +26,32 @@ const targetLangSelect = $<HTMLSelectElement>('#target-language');
 const configWarning = $<HTMLDivElement>('#config-warning');
 const statusBar = $<HTMLDivElement>('#status-bar');
 const testResult = $<HTMLDivElement>('#test-result');
+const siteSettings = $<HTMLDivElement>('#site-settings');
+const autoTranslateSiteInput = $<HTMLInputElement>('#auto-translate-site');
+const autoTranslateSiteLabel = $<HTMLSpanElement>('#auto-translate-site-label');
+const autoTranslateSiteHint = $<HTMLParagraphElement>('#auto-translate-site-hint');
+
+interface ActiveSiteContext {
+  url: string | null;
+  siteKey: string | null;
+  supported: boolean;
+}
 
 let currentConfig: ProviderConfig;
 let latestLoadToken = 0;
+let activeSiteContext: ActiveSiteContext = {
+  url: null,
+  siteKey: null,
+  supported: false,
+};
 
 async function init() {
   const activeProvider = await loadActiveProviderId();
   providerSelect.value = activeProvider;
-  await loadConfigIntoForm(activeProvider);
+  await Promise.all([
+    loadConfigIntoForm(activeProvider),
+    loadActiveSiteContext(),
+  ]);
   await queryCurrentStatus();
 }
 
@@ -47,6 +73,42 @@ async function loadConfigIntoForm(providerId: ProviderId) {
 
 function updateEndpointVisibility(providerId: ProviderId) {
   endpointLabel.classList.toggle('hidden', providerId !== 'custom');
+}
+
+async function loadActiveSiteContext() {
+  let url: string | null = null;
+
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    url = tab?.url ?? null;
+  } catch {
+    url = null;
+  }
+
+  const siteKey = getSiteKeyFromUrl(url);
+  const supported = isInjectablePageUrl(url) && siteKey !== null;
+
+  activeSiteContext = {
+    url,
+    siteKey,
+    supported,
+  };
+
+  siteSettings.classList.remove('hidden');
+
+  if (!supported || !siteKey) {
+    autoTranslateSiteInput.checked = false;
+    autoTranslateSiteInput.disabled = true;
+    autoTranslateSiteLabel.textContent = '总是翻译该网站';
+    autoTranslateSiteHint.textContent = '当前页面不支持站点自动翻译设置';
+    return;
+  }
+
+  const siteSettingsValue = await loadSiteTranslationSettings(siteKey);
+  autoTranslateSiteInput.checked = siteSettingsValue.autoTranslate;
+  autoTranslateSiteInput.disabled = false;
+  autoTranslateSiteLabel.textContent = `总是翻译 ${siteKey}`;
+  autoTranslateSiteHint.textContent = '保存后，该网站后续打开或刷新页面时会自动翻译。';
 }
 
 // Provider preset change
@@ -83,7 +145,17 @@ saveBtn.addEventListener('click', async () => {
   }
 
   await saveProviderConfig(newConfig, providerId);
-  await loadConfigIntoForm(providerId);
+
+  if (activeSiteContext.supported && activeSiteContext.siteKey) {
+    await saveSiteTranslationSettings(activeSiteContext.siteKey, {
+      autoTranslate: autoTranslateSiteInput.checked,
+    });
+  }
+
+  await Promise.all([
+    loadConfigIntoForm(providerId),
+    loadActiveSiteContext(),
+  ]);
   showTestResult('设置已保存', 'success');
 });
 

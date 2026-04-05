@@ -1,4 +1,10 @@
-import { DEFAULT_PROVIDER_CONFIG, type ProviderConfig } from './types';
+import {
+  DEFAULT_PROVIDER_CONFIG,
+  DEFAULT_SITE_TRANSLATION_SETTINGS,
+  type ProviderConfig,
+  type SiteTranslationSettings,
+} from './types';
+import { getSiteKeyFromUrl } from './site';
 import {
   DEFAULT_PROVIDER_ID,
   detectProviderFromEndpoint,
@@ -12,16 +18,24 @@ const ACTIVE_PROVIDER_KEY = 'nt:activeProvider';
 const PROVIDER_CONFIGS_KEY = 'nt:providerConfigs';
 const PROVIDER_API_KEYS_KEY = 'nt:providerApiKeys';
 const TARGET_LANGUAGE_KEY = 'nt:targetLanguage';
+const AUTO_TRANSLATE_SITES_KEY = 'nt:autoTranslateSites';
 
 const LEGACY_SYNC_KEYS = ['nt:endpoint', 'nt:model', 'nt:targetLanguage', 'nt:jsonMode'] as const;
 const LEGACY_LOCAL_KEYS = ['nt:apiKey'] as const;
 
-const SYNC_KEYS = [ACTIVE_PROVIDER_KEY, PROVIDER_CONFIGS_KEY, TARGET_LANGUAGE_KEY, ...LEGACY_SYNC_KEYS] as const;
+const SYNC_KEYS = [
+  ACTIVE_PROVIDER_KEY,
+  PROVIDER_CONFIGS_KEY,
+  TARGET_LANGUAGE_KEY,
+  AUTO_TRANSLATE_SITES_KEY,
+  ...LEGACY_SYNC_KEYS,
+] as const;
 const LOCAL_KEYS = [PROVIDER_API_KEYS_KEY, ...LEGACY_LOCAL_KEYS] as const;
 
 type ProviderProfile = Pick<ProviderConfig, 'endpoint' | 'model' | 'jsonMode'>;
 type StoredProviderProfiles = Partial<Record<ProviderId, Partial<ProviderProfile>>>;
 type StoredProviderApiKeys = Partial<Record<ProviderId, string>>;
+type StoredAutoTranslateSites = Record<string, boolean>;
 
 interface LegacyProviderState {
   hasData: boolean;
@@ -82,6 +96,22 @@ function getStoredProviderApiKeys(localData: Record<string, unknown>): StoredPro
   }
 
   return apiKeys;
+}
+
+function getStoredAutoTranslateSites(syncData: Record<string, unknown>): StoredAutoTranslateSites {
+  const rawSites = syncData[AUTO_TRANSLATE_SITES_KEY];
+  if (!isRecord(rawSites)) {
+    return {};
+  }
+
+  const sites: StoredAutoTranslateSites = {};
+  for (const [siteKey, enabled] of Object.entries(rawSites)) {
+    if (typeof siteKey === 'string' && enabled === true) {
+      sites[siteKey] = true;
+    }
+  }
+
+  return sites;
 }
 
 function getLegacyProviderState(
@@ -205,6 +235,7 @@ async function readStorageState() {
     legacyState,
     profiles: mergedState.profiles,
     apiKeys: mergedState.apiKeys,
+    autoTranslateSites: getStoredAutoTranslateSites(syncData),
   };
 }
 
@@ -285,6 +316,46 @@ export async function saveProviderConfig(config: Partial<ProviderConfig>, provid
     promises.push(chrome.storage.local.set(localItems));
   }
   await Promise.all(promises);
+}
+
+export async function loadSiteTranslationSettings(siteKey: string): Promise<SiteTranslationSettings> {
+  if (!siteKey) {
+    return DEFAULT_SITE_TRANSLATION_SETTINGS;
+  }
+
+  const state = await readStorageState();
+  return {
+    autoTranslate: state.autoTranslateSites[siteKey] === true,
+  };
+}
+
+export async function saveSiteTranslationSettings(siteKey: string, settings: SiteTranslationSettings): Promise<void> {
+  if (!siteKey) {
+    return;
+  }
+
+  const state = await readStorageState();
+  const nextSites = { ...state.autoTranslateSites };
+
+  if (settings.autoTranslate) {
+    nextSites[siteKey] = true;
+  } else {
+    delete nextSites[siteKey];
+  }
+
+  await chrome.storage.sync.set({
+    [AUTO_TRANSLATE_SITES_KEY]: nextSites,
+  });
+}
+
+export async function isAutoTranslateEnabledForUrl(url?: string | null): Promise<boolean> {
+  const siteKey = getSiteKeyFromUrl(url);
+  if (!siteKey) {
+    return false;
+  }
+
+  const settings = await loadSiteTranslationSettings(siteKey);
+  return settings.autoTranslate;
 }
 
 export function isProviderConfigured(config: ProviderConfig): boolean {

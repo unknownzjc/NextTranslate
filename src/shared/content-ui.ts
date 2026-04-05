@@ -1,17 +1,8 @@
+import { isInjectablePageUrl } from './site';
+
 export const CONTENT_SCRIPT_READY_KEY = '__NT_CONTENT_READY__';
 
-const INJECTABLE_PROTOCOLS = new Set(['http:', 'https:']);
-
-export function isInjectablePageUrl(url?: string | null): boolean {
-  if (!url) return false;
-
-  try {
-    const parsed = new URL(url);
-    return INJECTABLE_PROTOCOLS.has(parsed.protocol);
-  } catch {
-    return false;
-  }
-}
+export { isInjectablePageUrl };
 
 export async function isContentUiInjected(tabId: number): Promise<boolean> {
   try {

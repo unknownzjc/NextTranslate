@@ -1,7 +1,12 @@
-// Popup → Content Script
+// Popup/Background → Content Script
 export type ToggleTranslateMsg = { type: 'TOGGLE_TRANSLATE' };
 export type ToggleTranslateResponse = {
   action: 'started' | 'cancelled' | 'toggled_visible' | 'toggled_hidden' | 'busy';
+};
+
+export type StartTranslateIfIdleMsg = { type: 'START_TRANSLATE_IF_IDLE' };
+export type StartTranslateIfIdleResponse = {
+  started: boolean;
 };
 
 // Content Script → Background
@@ -60,4 +65,5 @@ export type MessageFromPopup =
   | TestConnectionMsg;
 
 export type MessageToContentScript =
-  | ToggleTranslateMsg;
+  | ToggleTranslateMsg
+  | StartTranslateIfIdleMsg;
