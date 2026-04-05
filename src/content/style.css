@@ -47,6 +47,149 @@
   transition: opacity 0.2s !important;
 }
 
+/* === Floating action ball (right-center) === */
+
+.nt-fab-wrap {
+  position: fixed !important;
+  top: 50% !important;
+  right: 24px !important;
+  transform: translateY(-50%) !important;
+  z-index: 2147483647 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  pointer-events: none !important;
+}
+
+.nt-fab-hint {
+  max-width: min(42vw, 220px) !important;
+  padding: 8px 12px !important;
+  border-radius: 999px !important;
+  background: rgba(17, 24, 39, 0.88) !important;
+  color: #fff !important;
+  font-size: 12px !important;
+  line-height: 1.4 !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.18) !important;
+  opacity: 0 !important;
+  transform: translateX(8px) !important;
+  transition: opacity 0.2s ease, transform 0.2s ease !important;
+}
+
+.nt-fab-wrap:hover .nt-fab-hint,
+.nt-fab-wrap[data-state="translating"] .nt-fab-hint,
+.nt-fab-wrap[data-state="error"] .nt-fab-hint {
+  opacity: 1 !important;
+  transform: translateX(0) !important;
+}
+
+.nt-fab-button {
+  position: relative !important;
+  width: 56px !important;
+  height: 56px !important;
+  border: none !important;
+  border-radius: 999px !important;
+  pointer-events: auto !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: linear-gradient(135deg, #4A90D9, #5B6EF5) !important;
+  color: #fff !important;
+  cursor: pointer !important;
+  box-shadow: 0 12px 28px rgba(74, 144, 217, 0.28) !important;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease !important;
+}
+
+.nt-fab-button:hover {
+  transform: translateY(-1px) scale(1.03) !important;
+  box-shadow: 0 14px 32px rgba(74, 144, 217, 0.34) !important;
+}
+
+.nt-fab-button:active {
+  transform: scale(0.97) !important;
+}
+
+.nt-fab-button[data-state="translating"] {
+  background: linear-gradient(135deg, #FF8A3D, #FF5F6D) !important;
+  box-shadow: 0 12px 28px rgba(255, 95, 109, 0.26) !important;
+  animation: nt-fab-pulse 1.4s ease-in-out infinite !important;
+}
+
+.nt-fab-button[data-state="translated-visible"],
+.nt-fab-button[data-state="translated-hidden"] {
+  background: linear-gradient(135deg, #4A90D9, #5B6EF5) !important;
+  box-shadow: 0 12px 28px rgba(74, 144, 217, 0.28) !important;
+}
+
+.nt-fab-button[data-state="error"] {
+  background: linear-gradient(135deg, #F97316, #EF4444) !important;
+  box-shadow: 0 12px 28px rgba(239, 68, 68, 0.28) !important;
+}
+
+.nt-fab-label {
+  font-size: 18px !important;
+  font-weight: 700 !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  letter-spacing: 0.02em !important;
+  line-height: 1 !important;
+}
+
+.nt-fab-badge {
+  position: absolute !important;
+  right: -2px !important;
+  bottom: -2px !important;
+  min-width: 22px !important;
+  height: 22px !important;
+  padding: 0 5px !important;
+  border-radius: 999px !important;
+  background: #fff !important;
+  color: #ff5f6d !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  line-height: 22px !important;
+  text-align: center !important;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12) !important;
+  display: none !important;
+}
+
+.nt-fab-button[data-badge="progress"] .nt-fab-badge,
+.nt-fab-button[data-badge="success"] .nt-fab-badge {
+  display: block !important;
+}
+
+.nt-fab-button[data-badge="success"] .nt-fab-badge {
+  background: #22c55e !important;
+  color: #fff !important;
+  min-width: 20px !important;
+  height: 20px !important;
+  padding: 0 !important;
+  font-size: 12px !important;
+  line-height: 20px !important;
+}
+
+@keyframes nt-fab-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04); }
+}
+
+@media (max-width: 768px) {
+  .nt-fab-wrap {
+    right: 16px !important;
+  }
+
+  .nt-fab-button {
+    width: 52px !important;
+    height: 52px !important;
+  }
+
+  .nt-fab-hint {
+    max-width: min(48vw, 180px) !important;
+  }
+}
+
 /* === Progress indicator (bottom-right) === */
 
 .nt-progress-container {

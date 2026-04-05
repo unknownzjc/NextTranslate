@@ -1,4 +1,5 @@
 import { loadActiveProviderId, loadProviderConfig, saveProviderConfig, isProviderConfigured } from '@shared/storage';
+import { ensureContentUiInjected } from '@shared/content-ui';
 import { PROVIDER_PRESETS, type ProviderId } from '@shared/providers';
 import type { ProviderConfig } from '@shared/types';
 import type { ToggleTranslateResponse, TranslateStatusMsg, TestConnectionResult } from '@shared/messages';
@@ -121,14 +122,8 @@ translateBtn.addEventListener('click', async () => {
     try {
       response = await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_TRANSLATE' });
     } catch {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: ['content/index.js'],
-      });
-      await chrome.scripting.insertCSS({
-        target: { tabId: tab.id },
-        files: ['content/style.css'],
-      });
+      const injected = await ensureContentUiInjected(tab.id, tab.url);
+      if (!injected) return;
       response = await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_TRANSLATE' });
     }
 

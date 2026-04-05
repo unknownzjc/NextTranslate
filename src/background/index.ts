@@ -1,5 +1,6 @@
 import { loadProviderConfig, saveProviderConfig } from '@shared/storage';
 import { buildTranslateRequest, parseJsonModeResponse, parseSeparatorModeResponse } from '@shared/prompt';
+import { ensureContentUiInjected } from '@shared/content-ui';
 import type {
   TranslateBatchMsg,
   TranslateBatchResult,
@@ -485,16 +486,38 @@ async function readErrorDetail(response: Response): Promise<string | null> {
   }
 }
 
+// --- Content UI injection ---
+
+async function injectOpenTabs() {
+  const tabs = await chrome.tabs.query({});
+  await Promise.all(tabs.map(tab => tab.id ? ensureContentUiInjected(tab.id, tab.url) : Promise.resolve(false)));
+}
+
 // --- Tab lifecycle ---
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   clearTabState(tabId);
 });
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'loading') {
     clearTabState(tabId);
+    return;
   }
+
+  if (changeInfo.status === 'complete') {
+    void ensureContentUiInjected(tabId, tab.url);
+  }
+});
+
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  chrome.tabs.get(tabId)
+    .then(tab => ensureContentUiInjected(tabId, tab.url))
+    .catch(() => false);
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  void injectOpenTabs();
 });
 
 // --- Context menu ---
@@ -505,6 +528,8 @@ chrome.runtime.onInstalled.addListener(() => {
     title: '翻译此页面',
     contexts: ['page'],
   });
+
+  void injectOpenTabs();
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
@@ -527,8 +552,9 @@ async function sendToggleToTab(tabId: number) {
   try {
     await chrome.tabs.sendMessage(tabId, { type: 'TOGGLE_TRANSLATE' });
   } catch {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['content/index.js'] });
-    await chrome.scripting.insertCSS({ target: { tabId }, files: ['content/style.css'] });
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    const injected = await ensureContentUiInjected(tabId, tab?.url);
+    if (!injected) return;
     await chrome.tabs.sendMessage(tabId, { type: 'TOGGLE_TRANSLATE' });
   }
 }
