@@ -280,6 +280,74 @@ describe('GitHub shouldSkip', () => {
     expect(compat.shouldSkip!(el)).toBe(true);
     form.remove();
   });
+
+  it('skips GitHub repository file tables labelled folders-and-files', () => {
+    const table = document.createElement('table');
+    table.setAttribute('aria-labelledby', 'folders-and-files');
+    const cell = document.createElement('th');
+    cell.textContent = 'Last commit message';
+    table.appendChild(cell);
+    document.body.appendChild(table);
+    expect(compat.shouldSkip!(cell)).toBe(true);
+    table.remove();
+  });
+
+  it('skips GitHub repository header actions like Watch / Fork / Star', () => {
+    const actions = document.createElement('ul');
+    actions.className = 'pagehead-actions';
+    const item = document.createElement('li');
+    item.textContent = 'Watch';
+    actions.appendChild(item);
+    document.body.appendChild(actions);
+    expect(compat.shouldSkip!(item)).toBe(true);
+    actions.remove();
+  });
+
+  it('does not skip the GitHub repository sidebar About heading and description', () => {
+    const partial = document.createElement('rails-partial');
+    partial.setAttribute('data-partial-name', 'codeViewRepoRoute.Sidebar');
+    partial.innerHTML = `
+      <div class="BorderGrid">
+        <div class="BorderGrid-row">
+          <div class="BorderGrid-cell">
+            <h2>About</h2>
+            <p class="f4">An open-source AI agent that brings the power of Gemini directly into your terminal.</p>
+            <h3>Topics</h3>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(partial);
+
+    const heading = partial.querySelector('h2')!;
+    const description = partial.querySelector('p.f4')!;
+    const topics = partial.querySelector('h3')!;
+
+    expect(compat.shouldSkip!(heading)).toBe(false);
+    expect(compat.shouldSkip!(description)).toBe(false);
+    expect(compat.shouldSkip!(topics)).toBe(true);
+    partial.remove();
+  });
+
+  it('skips non-About sections in the GitHub repository right sidebar', () => {
+    const partial = document.createElement('rails-partial');
+    partial.setAttribute('data-partial-name', 'codeViewRepoRoute.Sidebar');
+    partial.innerHTML = `
+      <div class="BorderGrid">
+        <div class="BorderGrid-row">
+          <div class="BorderGrid-cell">
+            <h2>Deployments</h2>
+            <p>Production deployment status and environment metadata should not be translated here.</p>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(partial);
+
+    const el = partial.querySelector('p')!;
+    expect(compat.shouldSkip!(el)).toBe(true);
+    partial.remove();
+  });
 });
 
 describe('Reddit shouldSkip', () => {

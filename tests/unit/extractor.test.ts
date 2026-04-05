@@ -406,6 +406,61 @@ describe('collectParagraphs', () => {
       'Normal discussion text should still be translated for readers.',
     ]);
   });
+
+  it('GitHub 仓库首页会跳过顶部 Watch/Fork/Star、folders-and-files 和 sidebar 非 About 区块，同时保留 README 与 About 简介', () => {
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://github.com/foo/bar');
+
+    const container = document.createElement('turbo-frame');
+    container.id = 'repo-content-turbo-frame';
+    container.innerHTML = `
+      <ul class="pagehead-actions">
+        <li>Watch</li>
+        <li>Fork</li>
+        <li>Star</li>
+      </ul>
+      <article class="markdown-body">
+        <h1>Project README title with enough text</h1>
+        <p>This README paragraph should still be translated for the repository home page.</p>
+      </article>
+      <table aria-labelledby="folders-and-files">
+        <thead>
+          <tr>
+            <th>Last commit message</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>docs: reorganize getting started and quickstart sections</td>
+          </tr>
+        </tbody>
+      </table>
+      <rails-partial data-partial-name="codeViewRepoRoute.Sidebar">
+        <div class="BorderGrid">
+          <div class="BorderGrid-row">
+            <div class="BorderGrid-cell">
+              <h2>About</h2>
+              <p class="f4">This sidebar about description should still be translated for repository readers.</p>
+              <h3>Topics</h3>
+            </div>
+          </div>
+          <div class="BorderGrid-row">
+            <div class="BorderGrid-cell">
+              <h2>Deployments</h2>
+              <p>Production deployment status and environment metadata should be skipped.</p>
+            </div>
+          </div>
+        </div>
+      </rails-partial>
+    `;
+    document.body.appendChild(container);
+
+    const paragraphs = collectParagraphs(container);
+    expect(paragraphs.map(p => p.text)).toEqual([
+      'Project README title with enough text',
+      'This README paragraph should still be translated for the repository home page.',
+      'This sidebar about description should still be translated for repository readers.',
+    ]);
+  });
 });
 
 describe('splitIntoBatches', () => {
