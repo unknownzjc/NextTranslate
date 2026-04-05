@@ -1,53 +1,11 @@
 export class ProgressBar {
-  private container: HTMLElement | null = null;
-  private label: HTMLElement | null = null;
+  show() {}
 
-  show() {
-    if (this.container) this.container.remove();
+  update(_completed: number, _total: number) {}
 
-    this.container = document.createElement('div');
-    this.container.className = 'nt-progress-container';
+  complete() {}
 
-    this.label = document.createElement('span');
-    this.label.className = 'nt-progress-label';
-    this.label.textContent = '翻译中...';
+  error(_message: string) {}
 
-    this.container.appendChild(this.label);
-    document.body.appendChild(this.container);
-  }
-
-  update(completed: number, total: number) {
-    if (!this.label) return;
-    if (total <= 0) {
-      this.label.textContent = '翻译中...';
-      return;
-    }
-    const pct = Math.round((completed / total) * 100);
-    this.label.textContent = `${completed}/${total} · ${pct}%`;
-  }
-
-  complete() {
-    if (!this.label || !this.container) return;
-    this.label.textContent = '翻译完成';
-    this.container.classList.add('nt-progress-done');
-    setTimeout(() => this.hide(), 1000);
-  }
-
-  error(message: string) {
-    if (!this.label || !this.container) return;
-    this.label.textContent = message;
-    this.container.classList.add('nt-progress-error');
-    setTimeout(() => this.hide(), 3000);
-  }
-
-  hide() {
-    if (this.container) {
-      this.container.classList.add('nt-progress-fadeout');
-      setTimeout(() => {
-        this.container?.remove();
-        this.container = null;
-        this.label = null;
-      }, 300);
-    }
-  }
+  hide() {}
 }

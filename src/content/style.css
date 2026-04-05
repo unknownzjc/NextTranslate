@@ -141,38 +141,55 @@
   position: absolute !important;
   right: -2px !important;
   bottom: -2px !important;
-  min-width: 22px !important;
+  min-width: 24px !important;
   height: 22px !important;
-  padding: 0 5px !important;
+  padding: 0 6px !important;
   border-radius: 999px !important;
-  background: #fff !important;
+  background: rgba(255, 255, 255, 0.96) !important;
   color: #ff5f6d !important;
   font-size: 10px !important;
-  font-weight: 700 !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.08em !important;
   line-height: 22px !important;
   text-align: center !important;
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12) !important;
   display: none !important;
 }
 
-.nt-fab-button[data-badge="progress"] .nt-fab-badge,
+.nt-fab-button[data-badge="loading"] .nt-fab-badge,
 .nt-fab-button[data-badge="success"] .nt-fab-badge {
   display: block !important;
 }
 
+.nt-fab-button[data-badge="loading"] .nt-fab-badge {
+  animation: nt-fab-badge-breathe 1.5s ease-in-out infinite !important;
+}
+
 .nt-fab-button[data-badge="success"] .nt-fab-badge {
-  background: #22c55e !important;
-  color: #fff !important;
   min-width: 20px !important;
   height: 20px !important;
   padding: 0 !important;
+  background: #22c55e !important;
+  color: #fff !important;
   font-size: 12px !important;
   line-height: 20px !important;
+  letter-spacing: 0 !important;
 }
 
 @keyframes nt-fab-pulse {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.04); }
+}
+
+@keyframes nt-fab-badge-breathe {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 @media (max-width: 768px) {
@@ -188,43 +205,6 @@
   .nt-fab-hint {
     max-width: min(48vw, 180px) !important;
   }
-}
-
-/* === Progress indicator (bottom-right) === */
-
-.nt-progress-container {
-  position: fixed !important;
-  bottom: 20px !important;
-  right: 20px !important;
-  background: rgba(74, 144, 217, 0.9) !important;
-  z-index: 2147483647 !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  padding: 6px 14px !important;
-  border-radius: 16px !important;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15) !important;
-  transition: opacity 0.3s !important;
-}
-
-.nt-progress-label {
-  font-size: 13px !important;
-  color: #fff !important;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-  font-weight: 500 !important;
-  white-space: nowrap !important;
-}
-
-.nt-progress-done {
-  background: rgba(76, 175, 80, 0.9) !important;
-}
-
-.nt-progress-error {
-  background: rgba(244, 67, 54, 0.9) !important;
-}
-
-.nt-progress-fadeout {
-  opacity: 0 !important;
 }
 
 /* === Orphan extension banner === */
