@@ -49,6 +49,7 @@ export class Injector {
       sourceEl.setAttribute('data-nt-id', ntId);
     }
 
+    const hostEl = getTranslationHost(sourceEl);
     let translationEl = this.findExistingTranslation(sourceEl, ntId);
 
     if (!translationEl) {
@@ -60,10 +61,10 @@ export class Injector {
       translationEl.setAttribute('lang', LANG_MAP[this.targetLanguage] ?? 'zh-CN');
       translationEl.style.display = this.visible ? '' : 'none';
 
-      if (shouldAppendInside(sourceEl)) {
-        sourceEl.appendChild(translationEl);
+      if (shouldAppendInside(hostEl)) {
+        hostEl.appendChild(translationEl);
       } else {
-        sourceEl.parentNode?.insertBefore(translationEl, sourceEl.nextSibling);
+        hostEl.parentNode?.insertBefore(translationEl, hostEl.nextSibling);
       }
       this.translationElements.add(translationEl);
     }
@@ -77,8 +78,8 @@ export class Injector {
 
     translationEl.textContent = translatedText;
 
-    // Remove the pending dots from the source element
-    const dotsEl = sourceEl.querySelector('.nt-pending-dots[data-nt]');
+    // Remove the pending dots from the visual host element
+    const dotsEl = getDotsHost(sourceEl).querySelector(':scope > .nt-pending-dots[data-nt]');
     if (dotsEl) {
       this.pendingDotsElements.delete(dotsEl as HTMLElement);
       dotsEl.remove();
@@ -94,16 +95,19 @@ export class Injector {
       sourceEl.setAttribute('data-nt-id', ntId);
     }
 
+    const hostEl = getTranslationHost(sourceEl);
+    const dotsHost = getDotsHost(sourceEl);
+
     // Don't double-insert if already a placeholder or real translation
     if (this.findExistingTranslation(sourceEl, ntId)) return;
 
-    // 1. Append animated dots at the end of the source element text
+    // 1. Append animated dots at the end of the visual title/label area
     const dotsEl = document.createElement('span');
     dotsEl.className = 'nt-pending-dots';
     dotsEl.setAttribute('data-nt', '');
     dotsEl.setAttribute('data-nt-theme', this.theme);
     dotsEl.textContent = '···';
-    sourceEl.appendChild(dotsEl);
+    dotsHost.appendChild(dotsEl);
     this.pendingDotsElements.add(dotsEl);
 
     // 2. Insert shimmer skeleton placeholder at the translation position
@@ -115,10 +119,10 @@ export class Injector {
     placeholderEl.setAttribute('lang', LANG_MAP[this.targetLanguage] ?? 'zh-CN');
     placeholderEl.style.display = this.visible ? '' : 'none';
 
-    if (shouldAppendInside(sourceEl)) {
-      sourceEl.appendChild(placeholderEl);
+    if (shouldAppendInside(hostEl)) {
+      hostEl.appendChild(placeholderEl);
     } else {
-      sourceEl.parentNode?.insertBefore(placeholderEl, sourceEl.nextSibling);
+      hostEl.parentNode?.insertBefore(placeholderEl, hostEl.nextSibling);
     }
     this.translationElements.add(placeholderEl);
   }
@@ -171,12 +175,14 @@ export class Injector {
   }
 
   private findExistingTranslation(sourceEl: Element, ntId: string): HTMLElement | null {
-    if (shouldAppendInside(sourceEl)) {
-      const existing = sourceEl.querySelector(`:scope > .nt-translation[data-nt-id="${CSS.escape(ntId)}"]`);
+    const hostEl = getTranslationHost(sourceEl);
+
+    if (shouldAppendInside(hostEl)) {
+      const existing = hostEl.querySelector(`:scope > .nt-translation[data-nt-id="${CSS.escape(ntId)}"]`);
       return existing instanceof HTMLElement ? existing : null;
     }
 
-    const nextSibling = sourceEl.nextElementSibling;
+    const nextSibling = hostEl.nextElementSibling;
     if (nextSibling?.classList.contains('nt-translation') && nextSibling.getAttribute('data-nt-id') === ntId) {
       return nextSibling as HTMLElement;
     }
@@ -195,6 +201,22 @@ export class Injector {
 
 function shouldAppendInside(sourceEl: Element): boolean {
   return APPEND_INSIDE_TAGS.has(sourceEl.tagName) || sourceEl.tagName.includes('-');
+}
+
+function getTranslationHost(sourceEl: Element): Element {
+  if (sourceEl.matches('[data-listview-item-title-container] > h3')) {
+    return sourceEl.parentElement ?? sourceEl;
+  }
+
+  if (sourceEl.matches('bdi[data-testid="issue-title"]')) {
+    return sourceEl.closest('h1[data-component="PH_Title"]') ?? sourceEl.parentElement ?? sourceEl;
+  }
+
+  return sourceEl;
+}
+
+function getDotsHost(sourceEl: Element): Element {
+  return getTranslationHost(sourceEl);
 }
 
 function parseAlpha(color: string): number {

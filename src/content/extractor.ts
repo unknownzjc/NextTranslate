@@ -320,14 +320,25 @@ export function collectParagraphs(
     return true;
   }
 
+  let selectorNodeCount = 0;
+
   // Collect elements matched by site-specific paragraph selectors first
   if (compat.paragraphSelector) {
     const selectorMatches = container.querySelectorAll(compat.paragraphSelector);
+    selectorNodeCount = selectorMatches.length;
     for (const el of selectorMatches) {
       if (visited.has(el)) continue;
       if (shouldSkipElement(el, compat)) continue;
       tryCollectElement(el);
     }
+  }
+
+  const selectorOnly = typeof compat.paragraphSelectorOnly === 'function'
+    ? compat.paragraphSelectorOnly(location.pathname)
+    : compat.paragraphSelectorOnly === true;
+
+  if (selectorOnly && selectorNodeCount > 0) {
+    return paragraphs;
   }
 
   function walk(el: Element) {

@@ -71,4 +71,49 @@ describe('Injector', () => {
     p1.querySelector('.nt-translation')?.remove();
     expect(injector.hasTranslation(p1)).toBe(false);
   });
+
+  it('GitHub issue 列表标题会把 dots 和译文挂到标题+label 容器上', () => {
+    document.body.innerHTML = `
+      <div data-listview-item-title-container="true">
+        <h3 id="issue-title">Issue title with enough text</h3>
+        <span class="Title-module__trailingBadgesContainer__INeSa"><span class="label">enhancement</span></span>
+      </div>
+    `;
+
+    const title = document.getElementById('issue-title')!;
+    const container = document.querySelector('[data-listview-item-title-container]')!;
+
+    injector.showLoadingPlaceholder(title);
+    expect(title.querySelector('.nt-pending-dots')).toBeNull();
+    expect(title.querySelector('.nt-translation')).toBeNull();
+    expect(container.querySelector(':scope > .nt-pending-dots')).not.toBeNull();
+    expect(container.querySelector(':scope > .nt-translation')).not.toBeNull();
+
+    injector.insertTranslation(title, '问题标题译文');
+    expect(container.querySelector(':scope > .nt-pending-dots')).toBeNull();
+    expect((container.querySelector(':scope > .nt-translation') as HTMLElement).textContent).toBe('问题标题译文');
+    expect(injector.hasTranslation(title)).toBe(true);
+  });
+
+  it('GitHub issue 详情标题会把译文挂到整个 h1 下方', () => {
+    document.body.innerHTML = `
+      <h1 data-component="PH_Title">
+        <bdi id="issue-detail-title" data-testid="issue-title">Issue detail title with enough text</bdi>
+        <span>#42</span>
+      </h1>
+    `;
+
+    const title = document.getElementById('issue-detail-title')!;
+    const heading = document.querySelector('h1[data-component="PH_Title"]')!;
+
+    injector.showLoadingPlaceholder(title);
+    expect(title.querySelector('.nt-pending-dots')).toBeNull();
+    expect(title.querySelector('.nt-translation')).toBeNull();
+    expect(heading.querySelector(':scope > .nt-pending-dots')).not.toBeNull();
+    expect(heading.querySelector(':scope > .nt-translation')).not.toBeNull();
+
+    injector.insertTranslation(title, '详情标题译文');
+    expect((heading.querySelector(':scope > .nt-translation') as HTMLElement).textContent).toBe('详情标题译文');
+    expect(injector.hasTranslation(title)).toBe(true);
+  });
 });

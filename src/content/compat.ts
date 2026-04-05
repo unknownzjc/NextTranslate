@@ -15,6 +15,11 @@ export interface SiteCompat {
    * Matched elements are collected in addition to the tag-based walk.
    */
   paragraphSelector?: string;
+  /**
+   * When true for the current page, only paragraphSelector matches are collected.
+   * If the selector yields no matches, extraction falls back to the generic tag walk.
+   */
+  paragraphSelectorOnly?: boolean | ((pathname: string) => boolean);
 }
 
 const EMPTY_COMPAT: SiteCompat = {};
@@ -129,14 +134,42 @@ const twitterCompat: SiteCompat = {
 
 // --- GitHub ---
 
+function isGitHubIssueListPage(pathname: string): boolean {
+  return /^\/[^/]+\/[^/]+\/issues\/?$/.test(pathname);
+}
+
+function isGitHubAttachmentText(text: string): boolean {
+  return /^[\w .()/-]+\.(?:json|txt|log|png|jpe?g|gif|webp|svg|pdf|zip|tar|gz|tgz|bz2|7z|csv)$/i.test(text);
+}
+
+function isGitHubMetadataLine(text: string): boolean {
+  return /^(?:CLI Version|Git Commit|Session ID|Operating System|Sandbox Environment|Model Version|Auth Type|Memory Usage|Terminal Name|Terminal Background|Kitty Keyboard Protocol|Node(?:\.js)? Version|npm Version|pnpm Version|Yarn Version|Browser Version|Extension Version|Platform|Runtime|Environment):\s+/i.test(text);
+}
+
+function isGitHubReactionNotice(text: string): boolean {
+  return /\breacted via\b/i.test(text) || /^\p{Emoji_Presentation}?\s*.+\s+reacted via\s+\w+/iu.test(text);
+}
+
+function isGitHubLeafLike(el: Element): boolean {
+  return el.children.length === 0 || el.matches('p, li, td, th, .email-fragment, [data-listview-item-title-container] > h3, bdi[data-testid="issue-title"]');
+}
+
 const githubCompat: SiteCompat = {
   containerSelector: '.repository-content, .js-issue-title + *, [data-target="readme-toc.content"], .comment-body, #repo-content-turbo-frame',
+  paragraphSelector: [
+    '[data-listview-item-title-container] > h3',
+    'bdi[data-testid="issue-title"]',
+    '.email-fragment',
+  ].join(', '),
+  paragraphSelectorOnly: (pathname: string) => isGitHubIssueListPage(pathname),
   shouldSkip(el: Element): boolean {
     const tag = el.tagName;
     if (tag === 'svg' || tag === 'PRE' || tag === 'CODE') return true;
+    if (el.matches('h1[data-component="PH_Title"]')) return true;
     // Skip file tree, code blocks, breadcrumbs
     if (el.closest('.react-directory-filename-column, .file-navigation, nav[aria-label="Breadcrumb"]')) return true;
     if (el.closest('.js-file-line, .blob-code, .highlight')) return true;
+    if (el.closest('.email-hidden-reply, .email-hidden-toggle, .email-quoted-reply')) return true;
     // Skip navigation and sidebar
     if (el.closest('.AppHeader, .pagehead, .UnderlineNav, .subnav, .tabnav, .reponav')) return true;
     if (el.closest('.BorderGrid--spacious .BorderGrid-cell:last-child')) return true;
@@ -146,9 +179,25 @@ const githubCompat: SiteCompat = {
     if (el.closest('.btn, .BtnGroup, .social-count, .starring-container')) return true;
     // GitHub path or filename patterns
     const text = (el.textContent ?? '').trim();
-    if (/^[a-f0-9]{7,40}$/.test(text)) return true; // commit hash
-    if (/^#\d+$/.test(text)) return true; // issue number
-    if (/^[\w./-]+\.(js|ts|tsx|jsx|py|go|rs|rb|java|c|cpp|h|css|html|md|json|yml|yaml|toml|lock|sh|sql)$/i.test(text)) return true;
+    if (isGitHubLeafLike(el)) {
+      if (/^[a-f0-9]{7,40}$/.test(text)) return true; // commit hash
+      if (/^#\d+$/.test(text)) return true; // issue number
+      if (/^[\w./-]+\.(js|ts|tsx|jsx|py|go|rs|rb|java|c|cpp|h|css|html|md|json|yml|yaml|toml|lock|sh|sql)$/i.test(text)) return true;
+      if (isGitHubAttachmentText(text)) return true;
+      if (isGitHubMetadataLine(text)) return true;
+      if (isGitHubReactionNotice(text)) return true;
+
+      const links = el.querySelectorAll('a');
+      if (links.length === 1) {
+        const onlyLink = links[0];
+        const linkText = (onlyLink.textContent ?? '').trim();
+        const href = onlyLink.getAttribute('href') ?? '';
+        if (linkText === text && (href.includes('/user-attachments/') || isGitHubAttachmentText(linkText))) {
+          return true;
+        }
+      }
+    }
+
     if (isSpecialContent(text)) return true;
     return false;
   },

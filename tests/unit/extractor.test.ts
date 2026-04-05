@@ -6,6 +6,7 @@ import {
   restoreCodePlaceholders,
   estimateTokens,
   splitIntoBatches,
+  collectParagraphs,
 } from '../../src/content/extractor';
 
 describe('isChineseDominant', () => {
@@ -146,6 +147,137 @@ describe('estimateTokens', () => {
   it('CJK 文本按 1:1.5 估算', () => {
     const text = '你好世'; // 3 CJK chars → 2 tokens
     expect(estimateTokens(text)).toBeCloseTo(2, 0);
+  });
+});
+
+describe('collectParagraphs', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('GitHub issue 列表页只收集 issue 标题', () => {
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://github.com/foo/bar/issues');
+
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div class="repository-content">
+        <h2>Search results</h2>
+        <div data-listview-item-title-container="true">
+          <h3>Issue title one with enough text</h3>
+        </div>
+        <div data-listview-item-title-container="true">
+          <h3>Issue title two with enough text</h3>
+        </div>
+        <p>This issue metadata text should not be translated on the list page.</p>
+      </div>
+    `;
+    document.body.appendChild(container);
+
+    const paragraphs = collectParagraphs(container);
+    expect(paragraphs.map(p => p.text)).toEqual([
+      'Issue title one with enough text',
+      'Issue title two with enough text',
+    ]);
+  });
+
+  it('GitHub issue 详情页会收集标题和正文，但标题不带编号', () => {
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://github.com/foo/bar/issues/42');
+
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div class="repository-content">
+        <h1 data-component="PH_Title">
+          <bdi data-testid="issue-title">Issue detail title with enough text</bdi>
+          <span>#42</span>
+        </h1>
+        <div class="markdown-body">
+          <p>This issue body should still be translated on the detail page.</p>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(container);
+
+    const paragraphs = collectParagraphs(container);
+    expect(paragraphs.map(p => p.text)).toEqual([
+      'Issue detail title with enough text',
+      'This issue body should still be translated on the detail page.',
+    ]);
+  });
+
+  it('GitHub issue 详情页在标题已翻译后不会回退收集 h1 再翻一次，但正文仍会翻译', () => {
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://github.com/foo/bar/issues/42');
+
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div class="repository-content">
+        <h1 data-component="PH_Title">
+          <bdi data-testid="issue-title">Issue detail title with enough text</bdi>
+          <span>#42</span>
+        </h1>
+        <div class="markdown-body">
+          <p>This issue body should still be translated on the detail page.</p>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(container);
+
+    const paragraphs = collectParagraphs(
+      container,
+      (el) => el.matches('bdi[data-testid="issue-title"]'),
+    );
+    expect(paragraphs.map(p => p.text)).toEqual([
+      'This issue body should still be translated on the detail page.',
+    ]);
+  });
+
+  it('GitHub issue 评论中的 email fragment 会被收集，quoted reply 不会', () => {
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://github.com/foo/bar/issues/42');
+
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div class="repository-content">
+        <div class="markdown-body">
+          <div class="markdown-body email-format">
+            <div class="email-fragment">This comment arrived via email and should be translated as a comment body.</div>
+            <span class="email-hidden-toggle">…</span>
+            <div class="email-hidden-reply">
+              <div class="email-quoted-reply">Quoted reply content should be skipped and not translated again.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(container);
+
+    const paragraphs = collectParagraphs(container);
+    expect(paragraphs.map(p => p.text)).toEqual([
+      'This comment arrived via email and should be translated as a comment body.',
+    ]);
+  });
+
+  it('GitHub issue 详情页会跳过附件、commit hash、版本信息和 reaction 通知', () => {
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://github.com/foo/bar/issues/42');
+
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div class="repository-content">
+        <div class="markdown-body">
+          <p>Normal discussion text should still be translated for readers.</p>
+          <p><a href="https://github.com/user-attachments/files/1/report.json">report.json</a></p>
+          <ul>
+            <li>Git Commit: 8b1e649</li>
+            <li>CLI Version: 0.36.0</li>
+          </ul>
+          <div class="email-fragment">🧞 Richard reacted via Gmail</div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(container);
+
+    const paragraphs = collectParagraphs(container);
+    expect(paragraphs.map(p => p.text)).toEqual([
+      'Normal discussion text should still be translated for readers.',
+    ]);
   });
 });
 
