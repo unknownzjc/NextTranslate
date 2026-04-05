@@ -52,6 +52,13 @@ describe('getSiteCompat', () => {
     const compat = getSiteCompat('github.com');
     expect(compat.containerSelector).toContain('.repository-content');
     expect(compat.shouldSkip).toBeDefined();
+    expect(compat.paragraphSelector).toContain('[data-listview-item-title-container] > h3');
+    expect(compat.paragraphSelector).toContain('bdi[data-testid="issue-title"]');
+    expect(compat.paragraphSelector).toContain('.email-fragment');
+    expect(typeof compat.paragraphSelectorOnly).toBe('function');
+    expect((compat.paragraphSelectorOnly as (pathname: string) => boolean)('/foo/bar/issues')).toBe(true);
+    expect((compat.paragraphSelectorOnly as (pathname: string) => boolean)('/foo/bar/issues/123')).toBe(false);
+    expect((compat.paragraphSelectorOnly as (pathname: string) => boolean)('/foo/bar')).toBe(false);
   });
 
   it('returns StackOverflow compat', () => {
@@ -185,6 +192,43 @@ describe('GitHub shouldSkip', () => {
     el.textContent = 'This bug occurs when the user clicks the submit button twice';
     document.body.appendChild(el);
     expect(compat.shouldSkip!(el)).toBe(false);
+    el.remove();
+  });
+
+  it('skips quoted email reply content', () => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'email-hidden-reply';
+    const el = document.createElement('div');
+    el.className = 'email-fragment';
+    el.textContent = 'Quoted email reply that should not be translated again';
+    wrapper.appendChild(el);
+    document.body.appendChild(wrapper);
+    expect(compat.shouldSkip!(el)).toBe(true);
+    wrapper.remove();
+  });
+
+  it('skips attachments', () => {
+    const el = document.createElement('p');
+    el.textContent = 'bug-report-history-1775328468610.json';
+    document.body.appendChild(el);
+    expect(compat.shouldSkip!(el)).toBe(true);
+    el.remove();
+  });
+
+  it('skips version and environment metadata lines', () => {
+    const el = document.createElement('li');
+    el.textContent = 'CLI Version: 0.36.0';
+    document.body.appendChild(el);
+    expect(compat.shouldSkip!(el)).toBe(true);
+    el.remove();
+  });
+
+  it('skips reaction notices', () => {
+    const el = document.createElement('div');
+    el.className = 'email-fragment';
+    el.textContent = '🧞 Richard reacted via Gmail';
+    document.body.appendChild(el);
+    expect(compat.shouldSkip!(el)).toBe(true);
     el.remove();
   });
 });
