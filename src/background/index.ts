@@ -1,4 +1,4 @@
-import { loadProviderConfig, saveProviderConfig } from '@shared/storage';
+import { isAutoTranslateEnabledForUrl, loadProviderConfig, saveProviderConfig } from '@shared/storage';
 import { buildTranslateRequest, parseJsonModeResponse, parseSeparatorModeResponse } from '@shared/prompt';
 import { ensureContentUiInjected } from '@shared/content-ui';
 import type {
@@ -506,7 +506,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 
   if (changeInfo.status === 'complete') {
-    void ensureContentUiInjected(tabId, tab.url);
+    void maybeAutoTranslateTab(tabId, tab.url);
   }
 });
 
@@ -557,6 +557,25 @@ async function sendToggleToTab(tabId: number) {
     if (!injected) return;
     await chrome.tabs.sendMessage(tabId, { type: 'TOGGLE_TRANSLATE' });
   }
+}
+
+async function sendStartTranslateIfIdleToTab(tabId: number, url?: string | null) {
+  const injected = await ensureContentUiInjected(tabId, url);
+  if (!injected) return;
+
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: 'START_TRANSLATE_IF_IDLE' });
+  } catch {
+    // Ignore tabs that navigated away or no longer accept messages.
+  }
+}
+
+async function maybeAutoTranslateTab(tabId: number, url?: string | null) {
+  if (!await isAutoTranslateEnabledForUrl(url)) {
+    return;
+  }
+
+  await sendStartTranslateIfIdleToTab(tabId, url);
 }
 
 // --- Backoff state recovery ---

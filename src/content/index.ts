@@ -1,9 +1,13 @@
-import type { ToggleTranslateResponse, TranslateStatusMsg } from '@shared/messages';
+import type {
+  StartTranslateIfIdleResponse,
+  ToggleTranslateResponse,
+  TranslateStatusMsg,
+} from '@shared/messages';
 import { CONTENT_SCRIPT_READY_KEY } from '@shared/content-ui';
-import { isProviderConfigured, loadProviderConfig } from '@shared/storage';
+import { isAutoTranslateEnabledForUrl, isProviderConfigured, loadProviderConfig } from '@shared/storage';
+import { getMainDomain } from '@shared/site';
 import type { ProviderConfig } from '@shared/types';
 import { collectParagraphs, findMainContainer } from './extractor';
-import { getMainDomain } from './compat';
 import { Translator } from './translator';
 import { Injector } from './injector';
 import { ProgressBar } from './progress';
@@ -18,6 +22,7 @@ type TranslateState = 'idle' | 'translating' | 'done';
 const VIEWPORT_TRANSLATION_MARGIN_PX = 520;
 const DOM_WORK_DEBOUNCE_MS = 180;
 const SCROLL_IDLE_MS = 140;
+const SPA_AUTO_TRANSLATE_DELAY_MS = 320;
 
 let state: TranslateState = 'idle';
 let translationsVisible = true;
@@ -26,6 +31,7 @@ let mutationObserver: MutationObserver | null = null;
 let domWorkTimer: ReturnType<typeof setTimeout> | null = null;
 let scrollIdleTimer: ReturnType<typeof setTimeout> | null = null;
 let viewportQueueFrame: number | null = null;
+let navigationAutoTranslateTimer: ReturnType<typeof setTimeout> | null = null;
 let mainContainer: Element | null = null;
 let pendingIncrementalTranslation = false;
 let pendingNewContent = false;
@@ -75,6 +81,12 @@ function showFloatingBallError(message: string) {
 function updateFloatingBallFromResponse(response: ToggleTranslateResponse) {
   if (response.action === 'busy') return;
   syncFloatingBallState();
+}
+
+function clearNavigationAutoTranslateTimer() {
+  if (!navigationAutoTranslateTimer) return;
+  clearTimeout(navigationAutoTranslateTimer);
+  navigationAutoTranslateTimer = null;
 }
 
 async function handleFloatingBallClick() {
@@ -173,6 +185,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'TOGGLE_TRANSLATE') {
     const response = handleToggle();
     sendResponse(response);
+    return;
+  }
+
+  if (message.type === 'START_TRANSLATE_IF_IDLE') {
+    sendResponse(handleStartTranslateIfIdle());
   }
 });
 
@@ -183,7 +200,7 @@ function handleToggle(): ToggleTranslateResponse {
   try {
     switch (state) {
       case 'idle':
-        void startTranslation();
+        startTranslationIfIdle();
         return { action: 'started' };
 
       case 'translating':
@@ -199,6 +216,44 @@ function handleToggle(): ToggleTranslateResponse {
   } finally {
     toggleBusy = false;
   }
+}
+
+function handleStartTranslateIfIdle(): StartTranslateIfIdleResponse {
+  if (toggleBusy) {
+    return { started: false };
+  }
+
+  return { started: startTranslationIfIdle() };
+}
+
+function startTranslationIfIdle(): boolean {
+  if (state !== 'idle') {
+    return false;
+  }
+
+  void startTranslation();
+  return true;
+}
+
+async function maybeAutoTranslateCurrentPage() {
+  if (toggleBusy || state !== 'idle') {
+    return false;
+  }
+
+  const autoTranslateEnabled = await isAutoTranslateEnabledForUrl(location.href);
+  if (!autoTranslateEnabled) {
+    return false;
+  }
+
+  return startTranslationIfIdle();
+}
+
+function scheduleAutoTranslateAfterSpaNavigation() {
+  clearNavigationAutoTranslateTimer();
+  navigationAutoTranslateTimer = setTimeout(() => {
+    navigationAutoTranslateTimer = null;
+    void maybeAutoTranslateCurrentPage();
+  }, SPA_AUTO_TRANSLATE_DELAY_MS);
 }
 
 // --- Translation flow ---
@@ -255,6 +310,7 @@ async function runTranslationPass(config?: ProviderConfig) {
 }
 
 async function startTranslation() {
+  clearNavigationAutoTranslateTimer();
   state = 'translating';
   translationsVisible = true;
   pendingIncrementalTranslation = false;
@@ -323,6 +379,7 @@ async function primeViewportQueuePreview() {
 }
 
 function cancelTranslation() {
+  clearNavigationAutoTranslateTimer();
   state = 'idle';
   pendingIncrementalTranslation = false;
   pendingNewContent = false;
@@ -460,6 +517,7 @@ function startObserver() {
 }
 
 function stopObserver() {
+  clearNavigationAutoTranslateTimer();
   if (mutationObserver) {
     mutationObserver.disconnect();
     mutationObserver = null;
@@ -501,6 +559,7 @@ function handleSpaNavigation(nextUrl?: string) {
   stopObserver();
   mainContainer = null;
   syncFloatingBallState();
+  scheduleAutoTranslateAfterSpaNavigation();
 }
 
 window.addEventListener('popstate', () => handleSpaNavigation());

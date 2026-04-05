@@ -28,8 +28,15 @@ vi.stubGlobal('chrome', {
   },
 });
 
-import { loadActiveProviderId, loadProviderConfig, saveProviderConfig } from '@shared/storage';
-import { DEFAULT_PROVIDER_CONFIG } from '@shared/types';
+import {
+  isAutoTranslateEnabledForUrl,
+  loadActiveProviderId,
+  loadProviderConfig,
+  loadSiteTranslationSettings,
+  saveProviderConfig,
+  saveSiteTranslationSettings,
+} from '@shared/storage';
+import { DEFAULT_PROVIDER_CONFIG, DEFAULT_SITE_TRANSLATION_SETTINGS } from '@shared/types';
 
 describe('storage', () => {
   beforeEach(() => {
@@ -93,5 +100,33 @@ describe('storage', () => {
     expect(openaiConfig.model).toBe('gpt-4o-mini');
     expect(kimiConfig.apiKey).toBe('sk-kimi');
     expect(kimiConfig.model).toBe('moonshot-v1-8k');
+  });
+
+  it('站点自动翻译默认关闭', async () => {
+    const settings = await loadSiteTranslationSettings('github.com');
+    expect(settings).toEqual(DEFAULT_SITE_TRANSLATION_SETTINGS);
+  });
+
+  it('保存并读取站点自动翻译开关', async () => {
+    await saveSiteTranslationSettings('github.com', { autoTranslate: true });
+
+    expect(mockStorage.sync['nt:autoTranslateSites']).toEqual({ 'github.com': true });
+    expect(await loadSiteTranslationSettings('github.com')).toEqual({ autoTranslate: true });
+  });
+
+  it('关闭站点自动翻译时会移除对应站点 key', async () => {
+    await saveSiteTranslationSettings('github.com', { autoTranslate: true });
+    await saveSiteTranslationSettings('github.com', { autoTranslate: false });
+
+    expect(mockStorage.sync['nt:autoTranslateSites']).toEqual({});
+    expect(await loadSiteTranslationSettings('github.com')).toEqual({ autoTranslate: false });
+  });
+
+  it('按主域名匹配自动翻译站点设置', async () => {
+    await saveSiteTranslationSettings('github.com', { autoTranslate: true });
+
+    await expect(isAutoTranslateEnabledForUrl('https://docs.github.com/en/get-started')).resolves.toBe(true);
+    await expect(isAutoTranslateEnabledForUrl('https://github.com/features')).resolves.toBe(true);
+    await expect(isAutoTranslateEnabledForUrl('https://example.com')).resolves.toBe(false);
   });
 });

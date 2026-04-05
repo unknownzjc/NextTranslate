@@ -79,10 +79,11 @@ describe('content viewport eager queue loading', () => {
         jsonMode: 'auto',
       })),
       isProviderConfigured: vi.fn(() => true),
+      isAutoTranslateEnabledForUrl: vi.fn(async () => false),
     }));
 
-    vi.doMock('../../src/content/compat', async () => {
-      const actual = await vi.importActual<typeof import('../../src/content/compat')>('../../src/content/compat');
+    vi.doMock('@shared/site', async () => {
+      const actual = await vi.importActual<typeof import('@shared/site')>('@shared/site');
       return {
         ...actual,
         getMainDomain: vi.fn(() => 'x.com'),
@@ -193,5 +194,197 @@ describe('content viewport eager queue loading', () => {
 
     expect(p2.querySelector('.nt-translation')?.textContent).toBe('第二段译文');
     expect(p2.querySelector('.nt-translation')?.classList.contains('nt-loading')).toBe(false);
+  });
+});
+
+describe('content auto-start message', () => {
+  it('START_TRANSLATE_IF_IDLE 只会在 idle 时启动，不会影响已完成译文的显示状态', async () => {
+    vi.resetModules();
+
+    document.body.innerHTML = `
+      <main>
+        <p id="p1">Hello world from the paragraph that should translate once.</p>
+      </main>
+    `;
+
+    vi.doMock('@shared/storage', () => ({
+      loadProviderConfig: vi.fn(async () => ({
+        endpoint: 'https://api.example.com',
+        apiKey: 'test-key',
+        model: 'test-model',
+        targetLanguage: 'Simplified Chinese',
+        jsonMode: 'auto',
+      })),
+      isProviderConfigured: vi.fn(() => true),
+      isAutoTranslateEnabledForUrl: vi.fn(async () => false),
+    }));
+
+    vi.doMock('../../src/content/extractor', async () => {
+      const actual = await vi.importActual<typeof import('../../src/content/extractor')>('../../src/content/extractor');
+
+      return {
+        ...actual,
+        findMainContainer: vi.fn(async () => document.querySelector('main')!),
+        collectParagraphs: vi.fn((container: Element, shouldSkipTranslated = () => false, includeElement = () => true) => {
+          return Array.from(container.querySelectorAll('p'))
+            .map((element) => ({
+              element,
+              text: element.textContent?.trim() ?? '',
+              codeMap: new Map<string, string>(),
+            }))
+            .filter(({ element, text }) => text.length >= 10 && includeElement(element) && !shouldSkipTranslated(element, text));
+        }),
+      };
+    });
+
+    const pendingBatches: PendingBatch[] = [];
+    const runtimeListeners: Array<(message: unknown, sender: unknown, sendResponse: (response: unknown) => void) => void> = [];
+
+    vi.stubGlobal('chrome', {
+      runtime: {
+        id: 'test-extension',
+        onMessage: {
+          addListener: vi.fn((listener: (message: unknown, sender: unknown, sendResponse: (response: unknown) => void) => void) => {
+            runtimeListeners.push(listener);
+          }),
+        },
+        sendMessage: vi.fn((message: { type: string; batchId?: string; texts?: string[] }) => {
+          if (message.type === 'TRANSLATE_BATCH') {
+            return new Promise((resolve) => {
+              pendingBatches.push({
+                message: {
+                  type: message.type,
+                  batchId: message.batchId!,
+                  texts: message.texts ?? [],
+                },
+                resolve: resolve as PendingBatch['resolve'],
+              });
+            });
+          }
+          return Promise.resolve({});
+        }),
+      },
+    });
+
+    await import('../../src/content/index');
+
+    const sendToContent = (message: { type: string }) => {
+      let response: unknown;
+      for (const listener of runtimeListeners) {
+        listener(message, {}, (value) => {
+          response = value;
+        });
+      }
+      return response;
+    };
+
+    expect(sendToContent({ type: 'START_TRANSLATE_IF_IDLE' })).toEqual({ started: true });
+    await flushPromises();
+
+    expect(pendingBatches).toHaveLength(1);
+    const firstBatch = pendingBatches.shift()!;
+    firstBatch.resolve({
+      batchId: firstBatch.message.batchId,
+      translations: ['首次译文'],
+    });
+    await flushPromises();
+
+    const translationEl = document.querySelector('.nt-translation') as HTMLElement | null;
+    expect(translationEl?.textContent).toBe('首次译文');
+    expect(translationEl?.style.display).not.toBe('none');
+
+    expect(sendToContent({ type: 'START_TRANSLATE_IF_IDLE' })).toEqual({ started: false });
+    await flushPromises();
+
+    expect(pendingBatches).toHaveLength(0);
+    expect((document.querySelector('.nt-translation') as HTMLElement | null)?.textContent).toBe('首次译文');
+    expect((document.querySelector('.nt-translation') as HTMLElement | null)?.style.display).not.toBe('none');
+  });
+});
+
+describe('content SPA auto translate', () => {
+  it('站点开启自动翻译后，SPA 路由切换会在新页面内容就绪后自动启动翻译', async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+
+    document.body.innerHTML = `
+      <main>
+        <p>Initial page content that should stay idle before navigation.</p>
+      </main>
+    `;
+
+    vi.doMock('@shared/storage', () => ({
+      loadProviderConfig: vi.fn(async () => ({
+        endpoint: 'https://api.example.com',
+        apiKey: 'test-key',
+        model: 'test-model',
+        targetLanguage: 'Simplified Chinese',
+        jsonMode: 'auto',
+      })),
+      isProviderConfigured: vi.fn(() => true),
+      isAutoTranslateEnabledForUrl: vi.fn(async () => true),
+    }));
+
+    vi.doMock('../../src/content/extractor', async () => {
+      const actual = await vi.importActual<typeof import('../../src/content/extractor')>('../../src/content/extractor');
+
+      return {
+        ...actual,
+        findMainContainer: vi.fn(async () => document.querySelector('main')!),
+        collectParagraphs: vi.fn((container: Element, shouldSkipTranslated = () => false, includeElement = () => true) => {
+          return Array.from(container.querySelectorAll('p'))
+            .map((element) => ({
+              element,
+              text: element.textContent?.trim() ?? '',
+              codeMap: new Map<string, string>(),
+            }))
+            .filter(({ element, text }) => text.length >= 10 && includeElement(element) && !shouldSkipTranslated(element, text));
+        }),
+      };
+    });
+
+    const pendingBatches: PendingBatch[] = [];
+    vi.stubGlobal('chrome', {
+      runtime: {
+        id: 'test-extension',
+        onMessage: {
+          addListener: vi.fn(),
+        },
+        sendMessage: vi.fn((message: { type: string; batchId?: string; texts?: string[] }) => {
+          if (message.type === 'TRANSLATE_BATCH') {
+            return new Promise((resolve) => {
+              pendingBatches.push({
+                message: {
+                  type: message.type,
+                  batchId: message.batchId!,
+                  texts: message.texts ?? [],
+                },
+                resolve: resolve as PendingBatch['resolve'],
+              });
+            });
+          }
+          return Promise.resolve({});
+        }),
+      },
+    });
+
+    await import('../../src/content/index');
+
+    expect(pendingBatches).toHaveLength(0);
+
+    history.pushState({}, '', '/next-article');
+    document.body.innerHTML = `
+      <main>
+        <p>New SPA article content should be translated automatically after navigation.</p>
+      </main>
+    `;
+
+    await vi.advanceTimersByTimeAsync(320);
+    await flushPromises();
+
+    expect(pendingBatches).toHaveLength(1);
+    expect(pendingBatches[0].message.texts).toEqual([
+      'New SPA article content should be translated automatically after navigation.',
+    ]);
   });
 });

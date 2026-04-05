@@ -96,6 +96,43 @@ h2 {
   border-color: #4A90D9;
 }
 
+#site-settings {
+  margin: 4px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+#site-settings .checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  color: #374151;
+}
+
+#site-settings input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #4A90D9;
+  flex: 0 0 auto;
+}
+
+#auto-translate-site-label {
+  margin-bottom: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+#auto-translate-site-hint {
+  margin-top: 6px;
+  padding-left: 26px;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 #settings-actions {
   display: flex;
   gap: 8px;
