@@ -1,19 +1,9 @@
-import { loadProviderConfig, saveProviderConfig, isProviderConfigured } from '@shared/storage';
+import { loadActiveProviderId, loadProviderConfig, saveProviderConfig, isProviderConfigured } from '@shared/storage';
+import { PROVIDER_PRESETS, type ProviderId } from '@shared/providers';
 import type { ProviderConfig } from '@shared/types';
 import type { ToggleTranslateResponse, TranslateStatusMsg, TestConnectionResult } from '@shared/messages';
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
-
-interface ProviderPreset {
-  endpoint: string;
-  model: string;
-}
-
-const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
-  openai: { endpoint: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
-  zhipu: { endpoint: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
-  kimi: { endpoint: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
-};
 
 const translateBtn = $<HTMLButtonElement>('#translate-btn');
 const saveBtn = $<HTMLButtonElement>('#save-btn');
@@ -29,49 +19,38 @@ const statusBar = $<HTMLDivElement>('#status-bar');
 const testResult = $<HTMLDivElement>('#test-result');
 
 let currentConfig: ProviderConfig;
+let latestLoadToken = 0;
 
 async function init() {
-  currentConfig = await loadProviderConfig();
+  const activeProvider = await loadActiveProviderId();
+  providerSelect.value = activeProvider;
+  await loadConfigIntoForm(activeProvider);
+  await queryCurrentStatus();
+}
+
+async function loadConfigIntoForm(providerId: ProviderId) {
+  const loadToken = ++latestLoadToken;
+  const config = await loadProviderConfig(providerId);
+  if (loadToken !== latestLoadToken) {
+    return;
+  }
+
+  currentConfig = config;
   endpointInput.value = currentConfig.endpoint;
   apiKeyInput.value = currentConfig.apiKey;
   modelInput.value = currentConfig.model;
   targetLangSelect.value = currentConfig.targetLanguage;
-
-  // Detect which provider preset matches the current endpoint
-  const detectedProvider = detectProvider(currentConfig.endpoint);
-  providerSelect.value = detectedProvider;
-  updateEndpointVisibility(detectedProvider);
-
+  updateEndpointVisibility(providerId);
   updateTranslateButton();
-
-  await queryCurrentStatus();
 }
 
-function detectProvider(endpoint: string): string {
-  for (const [key, preset] of Object.entries(PROVIDER_PRESETS)) {
-    if (endpoint === preset.endpoint) return key;
-  }
-  return endpoint ? 'custom' : 'openai';
-}
-
-function updateEndpointVisibility(provider: string) {
-  endpointLabel.classList.toggle('hidden', provider !== 'custom');
+function updateEndpointVisibility(providerId: ProviderId) {
+  endpointLabel.classList.toggle('hidden', providerId !== 'custom');
 }
 
 // Provider preset change
-providerSelect.addEventListener('change', () => {
-  const provider = providerSelect.value;
-  const preset = PROVIDER_PRESETS[provider];
-
-  if (preset) {
-    endpointInput.value = preset.endpoint;
-    modelInput.value = preset.model;
-  } else {
-    endpointInput.value = '';
-    modelInput.value = '';
-  }
-
-  updateEndpointVisibility(provider);
+providerSelect.addEventListener('change', async () => {
+  await loadConfigIntoForm(providerSelect.value as ProviderId);
 });
 
 function updateTranslateButton() {
@@ -82,8 +61,8 @@ function updateTranslateButton() {
 
 // Save settings
 saveBtn.addEventListener('click', async () => {
-  const provider = providerSelect.value;
-  const preset = PROVIDER_PRESETS[provider];
+  const providerId = providerSelect.value as ProviderId;
+  const preset = providerId === 'custom' ? undefined : PROVIDER_PRESETS[providerId];
 
   const newConfig: Partial<ProviderConfig> = {
     endpoint: preset ? preset.endpoint : endpointInput.value.trim(),
@@ -102,9 +81,8 @@ saveBtn.addEventListener('click', async () => {
     }
   }
 
-  await saveProviderConfig(newConfig);
-  currentConfig = await loadProviderConfig();
-  updateTranslateButton();
+  await saveProviderConfig(newConfig, providerId);
+  await loadConfigIntoForm(providerId);
   showTestResult('设置已保存', 'success');
 });
 
