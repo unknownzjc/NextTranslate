@@ -50,14 +50,19 @@ describe('getSiteCompat', () => {
 
   it('returns GitHub compat', () => {
     const compat = getSiteCompat('github.com');
+    expect(compat.containerSelector).toContain('#diff-comparison-viewer-container');
     expect(compat.containerSelector).toContain('.repository-content');
     expect(compat.shouldSkip).toBeDefined();
     expect(compat.paragraphSelector).toContain('[data-listview-item-title-container] > h3');
     expect(compat.paragraphSelector).toContain('bdi[data-testid="issue-title"]');
+    expect(compat.paragraphSelector).toContain('h1[data-component="PH_Title"] > span.markdown-title');
+    expect(compat.paragraphSelector).toContain('a.markdown-title[href*="/pull/"]');
     expect(compat.paragraphSelector).toContain('.email-fragment');
     expect(typeof compat.paragraphSelectorOnly).toBe('function');
     expect((compat.paragraphSelectorOnly as (pathname: string) => boolean)('/foo/bar/issues')).toBe(true);
+    expect((compat.paragraphSelectorOnly as (pathname: string) => boolean)('/foo/bar/pulls')).toBe(true);
     expect((compat.paragraphSelectorOnly as (pathname: string) => boolean)('/foo/bar/issues/123')).toBe(false);
+    expect((compat.paragraphSelectorOnly as (pathname: string) => boolean)('/foo/bar/pull/123')).toBe(false);
     expect((compat.paragraphSelectorOnly as (pathname: string) => boolean)('/foo/bar')).toBe(false);
   });
 
@@ -230,6 +235,50 @@ describe('GitHub shouldSkip', () => {
     document.body.appendChild(el);
     expect(compat.shouldSkip!(el)).toBe(true);
     el.remove();
+  });
+
+  it('skips PR page header metadata text', () => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'prc-PageHeader-Description-w-ejP';
+    const el = document.createElement('span');
+    el.textContent = 'student wants to merge 2 commits into main from feature-branch';
+    wrapper.appendChild(el);
+    document.body.appendChild(wrapper);
+    expect(compat.shouldSkip!(el)).toBe(true);
+    wrapper.remove();
+  });
+
+  it('skips sidebar headings outside markdown content', () => {
+    const sidebar = document.createElement('aside');
+    sidebar.className = 'prc-PageLayout-SidebarWrapper-kLG4B';
+    const el = document.createElement('h3');
+    el.textContent = 'Reviewers';
+    sidebar.appendChild(el);
+    document.body.appendChild(sidebar);
+    expect(compat.shouldSkip!(el)).toBe(true);
+    sidebar.remove();
+  });
+
+  it('skips legacy GitHub discussion sidebar items like Reviewers', () => {
+    const sidebarItem = document.createElement('div');
+    sidebarItem.className = 'discussion-sidebar-item js-discussion-sidebar-item sidebar-assignee';
+    const el = document.createElement('p');
+    el.textContent = 'gemini-code-assist[bot] left review comments';
+    sidebarItem.appendChild(el);
+    document.body.appendChild(sidebarItem);
+    expect(compat.shouldSkip!(el)).toBe(true);
+    sidebarItem.remove();
+  });
+
+  it('skips all content inside js-issue-sidebar-form', () => {
+    const form = document.createElement('form');
+    form.className = 'js-issue-sidebar-form';
+    const el = document.createElement('p');
+    el.textContent = 'Reviewers and other sidebar content should not be translated';
+    form.appendChild(el);
+    document.body.appendChild(form);
+    expect(compat.shouldSkip!(el)).toBe(true);
+    form.remove();
   });
 });
 

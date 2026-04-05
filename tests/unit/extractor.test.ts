@@ -7,6 +7,7 @@ import {
   estimateTokens,
   splitIntoBatches,
   collectParagraphs,
+  findMainContainer,
 } from '../../src/content/extractor';
 
 describe('isChineseDominant', () => {
@@ -72,6 +73,32 @@ describe('shouldSkipElement', () => {
     document.body.appendChild(el);
     el.textContent = 'Hello world, this is a test paragraph';
     expect(shouldSkipElement(el)).toBe(false);
+  });
+
+  it('不把 display: contents 的包装元素误判为隐藏', () => {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    el.textContent = 'Wrapper text that should remain visible to traversal';
+    Object.defineProperty(el, 'offsetParent', { configurable: true, get: () => null });
+    const originalGetComputedStyle = globalThis.getComputedStyle;
+    globalThis.getComputedStyle = ((node: Element) => {
+      const style = originalGetComputedStyle(node);
+      if (node === el) {
+        return new Proxy(style, {
+          get(target, prop, receiver) {
+            if (prop === 'display') return 'contents';
+            return Reflect.get(target, prop, receiver);
+          },
+        }) as CSSStyleDeclaration;
+      }
+      return style;
+    }) as typeof getComputedStyle;
+
+    try {
+      expect(shouldSkipElement(el)).toBe(false);
+    } finally {
+      globalThis.getComputedStyle = originalGetComputedStyle;
+    }
   });
 
   it('跳过 nt- 前缀元素', () => {
@@ -147,6 +174,29 @@ describe('estimateTokens', () => {
   it('CJK 文本按 1:1.5 估算', () => {
     const text = '你好世'; // 3 CJK chars → 2 tokens
     expect(estimateTokens(text)).toBeCloseTo(2, 0);
+  });
+});
+
+describe('findMainContainer', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('GitHub PR 详情页优先按 selector 顺序选择 turbo frame，而不是文档里更早出现的 diff viewer', async () => {
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://github.com/foo/bar/pull/42');
+
+    const diffViewer = document.createElement('div');
+    diffViewer.id = 'diff-comparison-viewer-container';
+    diffViewer.innerHTML = '<p>Header-only container that should not win.</p>';
+
+    const turboFrame = document.createElement('turbo-frame');
+    turboFrame.id = 'repo-content-turbo-frame';
+    turboFrame.innerHTML = '<div class="js-discussion"><p>Real discussion container that should win.</p></div>';
+
+    document.body.append(diffViewer, turboFrame);
+
+    const container = await findMainContainer();
+    expect(container).toBe(turboFrame);
   });
 });
 
@@ -227,6 +277,83 @@ describe('collectParagraphs', () => {
     );
     expect(paragraphs.map(p => p.text)).toEqual([
       'This issue body should still be translated on the detail page.',
+    ]);
+  });
+
+  it('GitHub PR 列表页只收集 PR 标题', () => {
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://github.com/foo/bar/pulls');
+
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div class="repository-content">
+        <div class="js-issue-row">
+          <div class="flex-auto min-width-0 p-2">
+            <a class="markdown-title" href="/foo/bar/pull/1">First pull request title with enough text</a>
+            <div class="d-flex mt-1 text-small color-fg-muted">#1 opened by alice</div>
+          </div>
+        </div>
+        <div class="js-issue-row">
+          <div class="flex-auto min-width-0 p-2">
+            <a class="markdown-title" href="/foo/bar/pull/2">Second pull request title with enough text</a>
+            <div class="d-flex mt-1 text-small color-fg-muted">#2 opened by bob</div>
+          </div>
+        </div>
+        <p>This pull request metadata text should not be translated on the list page.</p>
+      </div>
+    `;
+    document.body.appendChild(container);
+
+    const paragraphs = collectParagraphs(container);
+    expect(paragraphs.map(p => p.text)).toEqual([
+      'First pull request title with enough text',
+      'Second pull request title with enough text',
+    ]);
+  });
+
+  it('GitHub PR 详情页会收集标题和正文，但跳过 header metadata、tab 和 sidebar', () => {
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://github.com/foo/bar/pull/42');
+
+    const container = document.createElement('div');
+    container.id = 'diff-comparison-viewer-container';
+    container.innerHTML = `
+      <header>
+        <div class="prc-PageHeader-TitleArea-2n2J0">
+          <h1 data-component="PH_Title">
+            <span class="markdown-title">PR detail title with enough text</span>
+            <span>#42</span>
+          </h1>
+        </div>
+        <div class="prc-PageHeader-Description-w-ejP">
+          <span>alice wants to merge 2 commits into main from feature/amazing-work</span>
+        </div>
+        <nav aria-label="Pull request navigation tabs">
+          <h2>Conversation</h2>
+        </nav>
+      </header>
+      <div class="js-discussion">
+        <div class="comment-body markdown-body">
+          <p>This PR body should still be translated on the detail page.</p>
+        </div>
+      </div>
+      <aside class="prc-PageLayout-SidebarWrapper-kLG4B">
+        <h3>Reviewers</h3>
+        <p>This sidebar helper text should be skipped completely.</p>
+      </aside>
+      <div class="discussion-sidebar-item js-discussion-sidebar-item sidebar-assignee">
+        <h3 class="discussion-sidebar-heading text-bold">Reviewers</h3>
+        <p>gemini-code-assist[bot] left review comments</p>
+      </div>
+      <form class="js-issue-sidebar-form">
+        <h3>Assignees</h3>
+        <p>Sidebar form content should be skipped as well.</p>
+      </form>
+    `;
+    document.body.appendChild(container);
+
+    const paragraphs = collectParagraphs(container);
+    expect(paragraphs.map(p => p.text)).toEqual([
+      'PR detail title with enough text',
+      'This PR body should still be translated on the detail page.',
     ]);
   });
 

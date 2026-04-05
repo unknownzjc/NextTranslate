@@ -116,4 +116,54 @@ describe('Injector', () => {
     expect((heading.querySelector(':scope > .nt-translation') as HTMLElement).textContent).toBe('详情标题译文');
     expect(injector.hasTranslation(title)).toBe(true);
   });
+
+  it('GitHub PR 列表标题会把标题与 label 保持同一行，dots 在 label 后，译文在下方', () => {
+    document.body.innerHTML = `
+      <div class="flex-auto min-width-0 p-2" id="pr-cell">
+        <a id="pr-list-title" class="markdown-title" href="/foo/bar/pull/42">Pull request title with enough text</a>
+        <span class="IssueLabel">priority/p1</span>
+        <div class="d-flex mt-1 text-small color-fg-muted">#42 opened by alice</div>
+      </div>
+    `;
+
+    const title = document.getElementById('pr-list-title')!;
+    const cell = document.getElementById('pr-cell')!;
+
+    injector.showLoadingPlaceholder(title);
+
+    const titleLine = cell.querySelector(':scope > .nt-github-pr-title-line');
+    expect(titleLine).not.toBeNull();
+    expect(titleLine?.querySelector('#pr-list-title')).toBe(title);
+    expect(titleLine?.querySelector('.IssueLabel')?.textContent).toBe('priority/p1');
+    expect(titleLine?.querySelector('.nt-pending-dots')).not.toBeNull();
+    expect(titleLine?.querySelector('.nt-translation')).not.toBeNull();
+    expect(cell.querySelector(':scope > .d-flex.mt-1.text-small.color-fg-muted')).not.toBeNull();
+
+    injector.insertTranslation(title, 'PR 标题译文');
+    expect(titleLine?.querySelector('.nt-pending-dots')).toBeNull();
+    expect((titleLine?.querySelector(':scope > .nt-translation') as HTMLElement).textContent).toBe('PR 标题译文');
+    expect(injector.hasTranslation(title)).toBe(true);
+  });
+
+  it('GitHub PR 详情标题会把译文挂到整个 h1 下方', () => {
+    document.body.innerHTML = `
+      <h1 data-component="PH_Title">
+        <span id="pr-detail-title" class="markdown-title">Pull request detail title with enough text</span>
+        <span>#42</span>
+      </h1>
+    `;
+
+    const title = document.getElementById('pr-detail-title')!;
+    const heading = document.querySelector('h1[data-component="PH_Title"]')!;
+
+    injector.showLoadingPlaceholder(title);
+    expect(title.querySelector('.nt-pending-dots')).toBeNull();
+    expect(title.querySelector('.nt-translation')).toBeNull();
+    expect(heading.querySelector(':scope > .nt-pending-dots')).not.toBeNull();
+    expect(heading.querySelector(':scope > .nt-translation')).not.toBeNull();
+
+    injector.insertTranslation(title, 'PR 详情标题译文');
+    expect((heading.querySelector(':scope > .nt-translation') as HTMLElement).textContent).toBe('PR 详情标题译文');
+    expect(injector.hasTranslation(title)).toBe(true);
+  });
 });
