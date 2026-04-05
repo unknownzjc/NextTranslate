@@ -147,6 +147,113 @@ describe('background tab state clearing', () => {
   });
 });
 
+describe('background content UI injection', () => {
+  let tabsUpdatedListener!: TabsUpdatedListener;
+  let ensureContentUiInjected!: ReturnType<typeof vi.fn>;
+  let isAutoTranslateEnabledForUrl!: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.resetModules();
+
+    ensureContentUiInjected = vi.fn(async () => true);
+    isAutoTranslateEnabledForUrl = vi.fn(async () => false);
+
+    vi.doMock('@shared/storage', () => ({
+      loadProviderConfig: vi.fn(async () => ({
+        endpoint: 'https://api.example.com',
+        apiKey: 'test-key',
+        model: 'test-model',
+        targetLanguage: 'Simplified Chinese',
+        jsonMode: 'auto',
+      })),
+      saveProviderConfig: vi.fn(async () => undefined),
+      isAutoTranslateEnabledForUrl,
+    }));
+
+    vi.doMock('@shared/prompt', () => ({
+      buildTranslateRequest: vi.fn(() => ({ messages: [] })),
+      parseJsonModeResponse: vi.fn(() => null),
+      parseSeparatorModeResponse: vi.fn(() => null),
+    }));
+
+    vi.doMock('@shared/content-ui', () => ({
+      ensureContentUiInjected,
+    }));
+
+    vi.stubGlobal('fetch', vi.fn());
+
+    vi.stubGlobal('chrome', {
+      runtime: {
+        onMessage: {
+          addListener: vi.fn(),
+        },
+        onStartup: {
+          addListener: vi.fn(),
+        },
+        onInstalled: {
+          addListener: vi.fn(),
+        },
+        sendMessage: vi.fn(() => Promise.resolve()),
+      },
+      action: {
+        setBadgeText: vi.fn(() => Promise.resolve()),
+        setBadgeBackgroundColor: vi.fn(() => Promise.resolve()),
+      },
+      alarms: {
+        create: vi.fn(),
+        clear: vi.fn(),
+        onAlarm: {
+          addListener: vi.fn(),
+        },
+      },
+      tabs: {
+        query: vi.fn(async () => []),
+        get: vi.fn(async (tabId: number) => ({ id: tabId, url: 'https://example.com/page' })),
+        sendMessage: vi.fn(async () => undefined),
+        onRemoved: {
+          addListener: vi.fn(),
+        },
+        onUpdated: {
+          addListener: vi.fn((listener: TabsUpdatedListener) => {
+            tabsUpdatedListener = listener;
+          }),
+        },
+        onActivated: {
+          addListener: vi.fn(),
+        },
+      },
+      contextMenus: {
+        create: vi.fn(),
+        onClicked: {
+          addListener: vi.fn(),
+        },
+      },
+      commands: {
+        onCommand: {
+          addListener: vi.fn(),
+        },
+      },
+      storage: {
+        session: {
+          get: vi.fn(async () => ({})),
+          set: vi.fn(async () => undefined),
+        },
+      },
+    });
+  });
+
+  it('tab complete 时即使未开启总是翻译，也会注入悬浮球 UI', async () => {
+    await import('../../src/background/index');
+
+    tabsUpdatedListener(7, { status: 'complete' }, { id: 7, url: 'https://example.com/article' } as chrome.tabs.Tab);
+    await flushPromises();
+
+    expect(ensureContentUiInjected).toHaveBeenCalledWith(7, 'https://example.com/article');
+    expect(isAutoTranslateEnabledForUrl).toHaveBeenCalledWith('https://example.com/article');
+  });
+});
+
 describe('background json mode fallback', () => {
   let runtimeMessageListener!: RuntimeMessageListener;
   let saveProviderConfig!: ReturnType<typeof vi.fn>;
