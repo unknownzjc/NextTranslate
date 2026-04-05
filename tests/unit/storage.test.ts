@@ -28,7 +28,7 @@ vi.stubGlobal('chrome', {
   },
 });
 
-import { loadProviderConfig, saveProviderConfig } from '@shared/storage';
+import { loadActiveProviderId, loadProviderConfig, saveProviderConfig } from '@shared/storage';
 import { DEFAULT_PROVIDER_CONFIG } from '@shared/types';
 
 describe('storage', () => {
@@ -42,23 +42,56 @@ describe('storage', () => {
     expect(config).toEqual(DEFAULT_PROVIDER_CONFIG);
   });
 
-  it('保存并加载非敏感设置到 sync', async () => {
-    await saveProviderConfig({ endpoint: 'https://api.openai.com/v1', model: 'gpt-4o-mini' });
+  it('保存并加载当前供应商设置', async () => {
+    await saveProviderConfig({ endpoint: 'https://api.openai.com/v1', model: 'gpt-4o-mini' }, 'openai');
     const config = await loadProviderConfig();
+
     expect(config.endpoint).toBe('https://api.openai.com/v1');
     expect(config.model).toBe('gpt-4o-mini');
+    expect(await loadActiveProviderId()).toBe('openai');
   });
 
-  it('API Key 默认存储在 local', async () => {
-    await saveProviderConfig({ apiKey: 'sk-test123' });
-    expect(mockStorage.local['nt:apiKey']).toBe('sk-test123');
+  it('API Key 默认按供应商存储在 local', async () => {
+    await saveProviderConfig({ apiKey: 'sk-test123' }, 'openai');
+    expect(mockStorage.local['nt:providerApiKeys']).toEqual({ openai: 'sk-test123' });
     expect(mockStorage.sync['nt:apiKey']).toBeUndefined();
   });
 
   it('endpoint 自动去除末尾斜杠', async () => {
-    await saveProviderConfig({ endpoint: 'https://api.openai.com/v1/' });
-    const config = await loadProviderConfig();
+    await saveProviderConfig({ endpoint: 'https://api.openai.com/v1/' }, 'openai');
+    const config = await loadProviderConfig('openai');
     expect(config.endpoint).toBe('https://api.openai.com/v1');
   });
 
+  it('每个供应商配置独立保存', async () => {
+    await saveProviderConfig({ apiKey: 'sk-openai', model: 'gpt-4o-mini' }, 'openai');
+    await saveProviderConfig({ apiKey: 'sk-zhipu', model: 'glm-4-flash' }, 'zhipu');
+
+    const openaiConfig = await loadProviderConfig('openai');
+    const zhipuConfig = await loadProviderConfig('zhipu');
+    const activeConfig = await loadProviderConfig();
+
+    expect(openaiConfig.apiKey).toBe('sk-openai');
+    expect(openaiConfig.model).toBe('gpt-4o-mini');
+    expect(zhipuConfig.apiKey).toBe('sk-zhipu');
+    expect(zhipuConfig.model).toBe('glm-4-flash');
+    expect(activeConfig.apiKey).toBe('sk-zhipu');
+    expect(await loadActiveProviderId()).toBe('zhipu');
+  });
+
+  it('保存新供应商时保留 legacy 旧配置', async () => {
+    mockStorage.sync['nt:endpoint'] = 'https://api.openai.com/v1';
+    mockStorage.sync['nt:model'] = 'gpt-4o-mini';
+    mockStorage.local['nt:apiKey'] = 'sk-legacy-openai';
+
+    await saveProviderConfig({ apiKey: 'sk-kimi', model: 'moonshot-v1-8k' }, 'kimi');
+
+    const openaiConfig = await loadProviderConfig('openai');
+    const kimiConfig = await loadProviderConfig('kimi');
+
+    expect(openaiConfig.apiKey).toBe('sk-legacy-openai');
+    expect(openaiConfig.model).toBe('gpt-4o-mini');
+    expect(kimiConfig.apiKey).toBe('sk-kimi');
+    expect(kimiConfig.model).toBe('moonshot-v1-8k');
+  });
 });

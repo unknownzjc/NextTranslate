@@ -1,44 +1,280 @@
-import { ProviderConfig, DEFAULT_PROVIDER_CONFIG } from './types';
+import { DEFAULT_PROVIDER_CONFIG, type ProviderConfig } from './types';
+import {
+  DEFAULT_PROVIDER_ID,
+  detectProviderFromEndpoint,
+  getDefaultProviderConfig,
+  isProviderId,
+  normalizeEndpoint,
+  type ProviderId,
+} from './providers';
 
-const SYNC_KEYS = ['nt:endpoint', 'nt:model', 'nt:targetLanguage', 'nt:jsonMode'] as const;
-const LOCAL_KEYS = ['nt:apiKey'] as const;
+const ACTIVE_PROVIDER_KEY = 'nt:activeProvider';
+const PROVIDER_CONFIGS_KEY = 'nt:providerConfigs';
+const PROVIDER_API_KEYS_KEY = 'nt:providerApiKeys';
+const TARGET_LANGUAGE_KEY = 'nt:targetLanguage';
 
-export async function loadProviderConfig(): Promise<ProviderConfig> {
+const LEGACY_SYNC_KEYS = ['nt:endpoint', 'nt:model', 'nt:targetLanguage', 'nt:jsonMode'] as const;
+const LEGACY_LOCAL_KEYS = ['nt:apiKey'] as const;
+
+const SYNC_KEYS = [ACTIVE_PROVIDER_KEY, PROVIDER_CONFIGS_KEY, TARGET_LANGUAGE_KEY, ...LEGACY_SYNC_KEYS] as const;
+const LOCAL_KEYS = [PROVIDER_API_KEYS_KEY, ...LEGACY_LOCAL_KEYS] as const;
+
+type ProviderProfile = Pick<ProviderConfig, 'endpoint' | 'model' | 'jsonMode'>;
+type StoredProviderProfiles = Partial<Record<ProviderId, Partial<ProviderProfile>>>;
+type StoredProviderApiKeys = Partial<Record<ProviderId, string>>;
+
+interface LegacyProviderState {
+  hasData: boolean;
+  providerId: ProviderId;
+  profile: Partial<ProviderProfile>;
+  apiKey?: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function parseJsonMode(value: unknown): ProviderConfig['jsonMode'] | undefined {
+  return value === 'auto' || value === 'enabled' || value === 'disabled' ? value : undefined;
+}
+
+function getStoredProviderProfiles(syncData: Record<string, unknown>): StoredProviderProfiles {
+  const rawProfiles = syncData[PROVIDER_CONFIGS_KEY];
+  if (!isRecord(rawProfiles)) {
+    return {};
+  }
+
+  const profiles: StoredProviderProfiles = {};
+  for (const [providerId, rawProfile] of Object.entries(rawProfiles)) {
+    if (!isProviderId(providerId) || !isRecord(rawProfile)) {
+      continue;
+    }
+
+    const profile: Partial<ProviderProfile> = {};
+    if (typeof rawProfile.endpoint === 'string') {
+      profile.endpoint = normalizeEndpoint(rawProfile.endpoint);
+    }
+    if (typeof rawProfile.model === 'string') {
+      profile.model = rawProfile.model;
+    }
+    const jsonMode = parseJsonMode(rawProfile.jsonMode);
+    if (jsonMode) {
+      profile.jsonMode = jsonMode;
+    }
+
+    profiles[providerId] = profile;
+  }
+
+  return profiles;
+}
+
+function getStoredProviderApiKeys(localData: Record<string, unknown>): StoredProviderApiKeys {
+  const rawApiKeys = localData[PROVIDER_API_KEYS_KEY];
+  if (!isRecord(rawApiKeys)) {
+    return {};
+  }
+
+  const apiKeys: StoredProviderApiKeys = {};
+  for (const [providerId, apiKey] of Object.entries(rawApiKeys)) {
+    if (isProviderId(providerId) && typeof apiKey === 'string') {
+      apiKeys[providerId] = apiKey;
+    }
+  }
+
+  return apiKeys;
+}
+
+function getLegacyProviderState(
+  syncData: Record<string, unknown>,
+  localData: Record<string, unknown>,
+): LegacyProviderState {
+  const endpoint = typeof syncData['nt:endpoint'] === 'string'
+    ? normalizeEndpoint(syncData['nt:endpoint'])
+    : undefined;
+  const model = typeof syncData['nt:model'] === 'string'
+    ? syncData['nt:model']
+    : undefined;
+  const jsonMode = parseJsonMode(syncData['nt:jsonMode']);
+  const apiKey = typeof localData['nt:apiKey'] === 'string'
+    ? localData['nt:apiKey']
+    : undefined;
+
+  return {
+    hasData: endpoint !== undefined || model !== undefined || jsonMode !== undefined || apiKey !== undefined,
+    providerId: detectProviderFromEndpoint(endpoint ?? ''),
+    profile: {
+      ...(endpoint !== undefined ? { endpoint } : {}),
+      ...(model !== undefined ? { model } : {}),
+      ...(jsonMode !== undefined ? { jsonMode } : {}),
+    },
+    ...(apiKey !== undefined ? { apiKey } : {}),
+  };
+}
+
+function mergeLegacyProviderState(
+  profiles: StoredProviderProfiles,
+  apiKeys: StoredProviderApiKeys,
+  legacyState: LegacyProviderState,
+): { profiles: StoredProviderProfiles; apiKeys: StoredProviderApiKeys } {
+  const mergedProfiles = { ...profiles };
+  const mergedApiKeys = { ...apiKeys };
+
+  if (legacyState.hasData && !mergedProfiles[legacyState.providerId]) {
+    mergedProfiles[legacyState.providerId] = legacyState.profile;
+  }
+  if (legacyState.apiKey !== undefined && mergedApiKeys[legacyState.providerId] === undefined) {
+    mergedApiKeys[legacyState.providerId] = legacyState.apiKey;
+  }
+
+  return { profiles: mergedProfiles, apiKeys: mergedApiKeys };
+}
+
+function resolveActiveProvider(
+  syncData: Record<string, unknown>,
+  profiles: StoredProviderProfiles,
+  apiKeys: StoredProviderApiKeys,
+  legacyState: LegacyProviderState,
+): ProviderId {
+  const storedActiveProvider = syncData[ACTIVE_PROVIDER_KEY];
+  if (isProviderId(storedActiveProvider)) {
+    return storedActiveProvider;
+  }
+
+  if (legacyState.hasData) {
+    return legacyState.providerId;
+  }
+
+  const firstConfiguredProvider = [...Object.keys(profiles), ...Object.keys(apiKeys)]
+    .find((providerId): providerId is ProviderId => isProviderId(providerId));
+
+  return firstConfiguredProvider ?? DEFAULT_PROVIDER_ID;
+}
+
+function getTargetLanguage(syncData: Record<string, unknown>): string {
+  return typeof syncData[TARGET_LANGUAGE_KEY] === 'string'
+    ? syncData[TARGET_LANGUAGE_KEY]
+    : DEFAULT_PROVIDER_CONFIG.targetLanguage;
+}
+
+function hasStoredProviderState(
+  syncData: Record<string, unknown>,
+  profiles: StoredProviderProfiles,
+  apiKeys: StoredProviderApiKeys,
+  legacyState: LegacyProviderState,
+): boolean {
+  return isProviderId(syncData[ACTIVE_PROVIDER_KEY])
+    || Object.keys(profiles).length > 0
+    || Object.keys(apiKeys).length > 0
+    || legacyState.hasData;
+}
+
+function buildProviderConfig(
+  providerId: ProviderId,
+  profiles: StoredProviderProfiles,
+  apiKeys: StoredProviderApiKeys,
+  targetLanguage: string,
+): ProviderConfig {
+  const defaults = getDefaultProviderConfig(providerId);
+  const profile = profiles[providerId] ?? {};
+
+  return {
+    ...defaults,
+    endpoint: profile.endpoint ?? defaults.endpoint,
+    apiKey: apiKeys[providerId] ?? defaults.apiKey,
+    model: profile.model ?? defaults.model,
+    targetLanguage,
+    jsonMode: profile.jsonMode ?? defaults.jsonMode,
+  };
+}
+
+async function readStorageState() {
   const [syncData, localData] = await Promise.all([
     chrome.storage.sync.get([...SYNC_KEYS]),
     chrome.storage.local.get([...LOCAL_KEYS]),
   ]);
 
-  // API Key: prefer sync (user enabled sync), fallback to local
-  const syncApiKey = (await chrome.storage.sync.get(['nt:apiKey']))['nt:apiKey'];
+  const profiles = getStoredProviderProfiles(syncData);
+  const apiKeys = getStoredProviderApiKeys(localData);
+  const legacyState = getLegacyProviderState(syncData, localData);
+  const mergedState = mergeLegacyProviderState(profiles, apiKeys, legacyState);
 
   return {
-    endpoint: (syncData['nt:endpoint'] as string | undefined) ?? DEFAULT_PROVIDER_CONFIG.endpoint,
-    apiKey: (syncApiKey as string | undefined) ?? (localData['nt:apiKey'] as string | undefined) ?? DEFAULT_PROVIDER_CONFIG.apiKey,
-    model: (syncData['nt:model'] as string | undefined) ?? DEFAULT_PROVIDER_CONFIG.model,
-    targetLanguage: (syncData['nt:targetLanguage'] as string | undefined) ?? DEFAULT_PROVIDER_CONFIG.targetLanguage,
-    jsonMode: (syncData['nt:jsonMode'] as ProviderConfig['jsonMode'] | undefined) ?? DEFAULT_PROVIDER_CONFIG.jsonMode,
+    syncData,
+    localData,
+    targetLanguage: getTargetLanguage(syncData),
+    legacyState,
+    profiles: mergedState.profiles,
+    apiKeys: mergedState.apiKeys,
   };
 }
 
-export async function saveProviderConfig(config: Partial<ProviderConfig>): Promise<void> {
+export async function loadActiveProviderId(): Promise<ProviderId> {
+  const state = await readStorageState();
+  return resolveActiveProvider(state.syncData, state.profiles, state.apiKeys, state.legacyState);
+}
+
+export async function loadProviderConfig(providerId?: ProviderId): Promise<ProviderConfig> {
+  const state = await readStorageState();
+
+  if (!providerId && !hasStoredProviderState(state.syncData, state.profiles, state.apiKeys, state.legacyState)) {
+    return {
+      ...DEFAULT_PROVIDER_CONFIG,
+      targetLanguage: state.targetLanguage,
+    };
+  }
+
+  const targetProviderId = providerId
+    ?? resolveActiveProvider(state.syncData, state.profiles, state.apiKeys, state.legacyState);
+
+  return buildProviderConfig(targetProviderId, state.profiles, state.apiKeys, state.targetLanguage);
+}
+
+export async function saveProviderConfig(config: Partial<ProviderConfig>, providerId?: ProviderId): Promise<void> {
+  const state = await readStorageState();
+  const targetProviderId = providerId
+    ?? resolveActiveProvider(state.syncData, state.profiles, state.apiKeys, state.legacyState);
+
   const syncItems: Record<string, unknown> = {};
   const localItems: Record<string, unknown> = {};
 
+  if (providerId !== undefined) {
+    syncItems[ACTIVE_PROVIDER_KEY] = providerId;
+  }
+
+  const nextProfile = { ...(state.profiles[targetProviderId] ?? {}) };
+  let profileChanged = false;
+
   if (config.endpoint !== undefined) {
-    syncItems['nt:endpoint'] = config.endpoint.replace(/\/+$/, '');
+    nextProfile.endpoint = normalizeEndpoint(config.endpoint);
+    profileChanged = true;
   }
   if (config.model !== undefined) {
-    syncItems['nt:model'] = config.model;
-  }
-  if (config.targetLanguage !== undefined) {
-    syncItems['nt:targetLanguage'] = config.targetLanguage;
+    nextProfile.model = config.model;
+    profileChanged = true;
   }
   if (config.jsonMode !== undefined) {
-    syncItems['nt:jsonMode'] = config.jsonMode;
+    nextProfile.jsonMode = config.jsonMode;
+    profileChanged = true;
   }
+
+  if (profileChanged) {
+    syncItems[PROVIDER_CONFIGS_KEY] = {
+      ...state.profiles,
+      [targetProviderId]: nextProfile,
+    } satisfies StoredProviderProfiles;
+    syncItems[ACTIVE_PROVIDER_KEY] = targetProviderId;
+  }
+
+  if (config.targetLanguage !== undefined) {
+    syncItems[TARGET_LANGUAGE_KEY] = config.targetLanguage;
+  }
+
   if (config.apiKey !== undefined) {
-    localItems['nt:apiKey'] = config.apiKey;
+    localItems[PROVIDER_API_KEYS_KEY] = {
+      ...state.apiKeys,
+      [targetProviderId]: config.apiKey,
+    } satisfies StoredProviderApiKeys;
+    syncItems[ACTIVE_PROVIDER_KEY] = targetProviderId;
   }
 
   const promises: Promise<void>[] = [];
