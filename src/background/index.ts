@@ -532,7 +532,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 
   if (changeInfo.status === 'complete') {
-    void maybeAutoTranslateTab(tabId, tab.url);
+    void ensureContentUiInjected(tabId, tab.url)
+      .then(() => maybeAutoTranslateTab(tabId, tab.url));
   }
 });
 
