@@ -36,13 +36,20 @@ describe('Injector', () => {
   });
 
   it('切换显示/隐藏', () => {
+    const style = document.createElement('style');
+    style.textContent = '.nt-translation[data-nt] { display: block !important; }';
+    document.head.appendChild(style);
+
     const p1 = document.getElementById('p1')!;
     injector.insertTranslation(p1, '你好世界');
     injector.setVisibility(false);
     const translation = p1.querySelector('.nt-translation') as HTMLElement;
     expect(translation.style.display).toBe('none');
+    expect(getComputedStyle(translation).display).toBe('none');
+
     injector.setVisibility(true);
     expect(translation.style.display).toBe('');
+    expect(getComputedStyle(translation).display).toBe('block');
   });
 
   it('removeAll 移除所有译文', () => {

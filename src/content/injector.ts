@@ -59,7 +59,7 @@ export class Injector {
       translationEl.setAttribute('data-nt-id', ntId);
       translationEl.setAttribute('data-nt-theme', this.theme);
       translationEl.setAttribute('lang', LANG_MAP[this.targetLanguage] ?? 'zh-CN');
-      translationEl.style.display = this.visible ? '' : 'none';
+      this.applyVisibility(translationEl);
 
       if (shouldAppendInside(hostEl)) {
         hostEl.appendChild(translationEl);
@@ -117,7 +117,7 @@ export class Injector {
     placeholderEl.setAttribute('data-nt-id', ntId);
     placeholderEl.setAttribute('data-nt-theme', this.theme);
     placeholderEl.setAttribute('lang', LANG_MAP[this.targetLanguage] ?? 'zh-CN');
-    placeholderEl.style.display = this.visible ? '' : 'none';
+    this.applyVisibility(placeholderEl);
 
     if (shouldAppendInside(hostEl)) {
       hostEl.appendChild(placeholderEl);
@@ -144,7 +144,7 @@ export class Injector {
     }
 
     for (const el of this.translationElements) {
-      el.style.display = visible ? '' : 'none';
+      this.applyVisibility(el);
     }
   }
 
@@ -198,6 +198,15 @@ export class Injector {
     }
 
     return null;
+  }
+
+  private applyVisibility(el: HTMLElement) {
+    if (this.visible) {
+      el.style.removeProperty('display');
+      return;
+    }
+
+    el.style.setProperty('display', 'none', 'important');
   }
 
   private pruneDetachedTranslations() {
