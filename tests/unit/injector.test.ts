@@ -62,4 +62,13 @@ describe('Injector', () => {
     expect(translations.length).toBe(1);
     expect(translations[0].textContent).toBe('你好世界 v2');
   });
+
+  it('hasTranslation 可识别译文是否仍挂载在源节点上', () => {
+    const p1 = document.getElementById('p1')!;
+    injector.insertTranslation(p1, '你好世界');
+    expect(injector.hasTranslation(p1)).toBe(true);
+
+    p1.querySelector('.nt-translation')?.remove();
+    expect(injector.hasTranslation(p1)).toBe(false);
+  });
 });

@@ -44,10 +44,12 @@ export interface TranslatorCallbacks {
   onComplete: () => void;
   onError: (error: string) => void;
   onCancelled: () => void;
+  onBlocksQueued?: (elements: Element[]) => void;
 }
 
 export interface TranslatorStartOptions {
   includeElement?: (el: Element) => boolean;
+  shouldSkipElement?: (el: Element, text: string) => boolean;
 }
 
 export class Translator {
@@ -69,7 +71,7 @@ export class Translator {
   hasPendingWork(container: Element, options: TranslatorStartOptions = {}): boolean {
     return collectParagraphs(
       container,
-      (el, text) => this.translatedSet.has(el) && this.translatedSourceText.get(el) === text,
+      (el, text) => this.shouldSkipBlock(el, text, options),
       options.includeElement,
     ).length > 0;
   }
@@ -86,7 +88,7 @@ export class Translator {
 
     const paragraphs = collectParagraphs(
       container,
-      (el, text) => this.translatedSet.has(el) && this.translatedSourceText.get(el) === text,
+      (el, text) => this.shouldSkipBlock(el, text, options),
       options.includeElement,
     );
     if (paragraphs.length === 0) {
@@ -130,6 +132,15 @@ export class Translator {
 
     for (let blockIndex = 0; blockIndex < this.blockStates.length; blockIndex++) {
       this.tryRenderBlock(blockIndex, runId);
+    }
+
+    if (this.callbacks.onBlocksQueued) {
+      const pendingEls = this.blockStates
+        .filter(bs => !bs.rendered)
+        .map(bs => bs.element);
+      if (pendingEls.length > 0) {
+        this.callbacks.onBlocksQueued(pendingEls);
+      }
     }
 
     if (this.renderedBlocks >= this.totalBlocks) {
@@ -222,6 +233,14 @@ export class Translator {
         await new Promise(r => setTimeout(r, Math.min(delay, 30000)));
       }
     }
+  }
+
+  private shouldSkipBlock(el: Element, text: string, options: TranslatorStartOptions): boolean {
+    if (!this.translatedSet.has(el) || this.translatedSourceText.get(el) !== text) {
+      return false;
+    }
+
+    return options.shouldSkipElement ? options.shouldSkipElement(el, text) : true;
   }
 
   private tryRenderBlock(blockIndex: number, runId: number) {

@@ -10,9 +10,7 @@ import { ProgressBar } from './progress';
 
 type TranslateState = 'idle' | 'translating' | 'done';
 
-const RESTORE_VIEWPORT_MARGIN_PX = 320;
 const VIEWPORT_TRANSLATION_MARGIN_PX = 520;
-const RESTORE_BATCH_LIMIT = 12;
 const DOM_WORK_DEBOUNCE_MS = 180;
 const SCROLL_IDLE_MS = 140;
 
@@ -28,11 +26,16 @@ let pendingNewContent = false;
 let domWorkInProgress = false;
 let isScrollActive = false;
 let latestProgress = { completed: 0, total: 0 };
-const pendingRestoreIds = new Set<string>();
 
 const injector = new Injector();
 const progressBar = new ProgressBar();
 const useViewportLazyTranslation = getMainDomain(location.hostname) === 'x.com';
+
+function markTranslationDone() {
+  state = 'done';
+  progressBar.complete();
+  reportTranslateStatus('done', latestProgress);
+}
 
 function reportTranslateStatus(
   status: TranslateStatusMsg['status'],
@@ -73,23 +76,32 @@ const translator = new Translator({
     progressBar.update(completed, total);
     reportTranslateStatus('translating', latestProgress);
   },
+  onBlocksQueued: (elements) => {
+    for (const el of elements) {
+      injector.showLoadingPlaceholder(el);
+    }
+  },
   onComplete: () => {
     if (pendingIncrementalTranslation && mainContainer) {
       pendingIncrementalTranslation = false;
-      void startIncrementalTranslation();
+      void startIncrementalTranslation().then(started => {
+        if (!started) {
+          markTranslationDone();
+        }
+      });
       return;
     }
 
-    state = 'done';
-    progressBar.complete();
-    reportTranslateStatus('done', latestProgress);
+    markTranslationDone();
   },
   onError: (error) => {
+    injector.clearLoadingIndicators();
     progressBar.error(error);
     reportTranslateStatus('error', latestProgress, error);
   },
   onCancelled: () => {
     state = 'idle';
+    injector.clearLoadingIndicators();
     progressBar.hide();
   },
 });
@@ -134,21 +146,48 @@ function getTranslationIncludeElement(): ((el: Element) => boolean) | undefined 
   return (el: Element) => isNearViewport(el, VIEWPORT_TRANSLATION_MARGIN_PX);
 }
 
+function shouldSkipRenderedElement(el: Element): boolean {
+  return injector.hasTranslation(el);
+}
+
+async function ensureMainContainerReady(): Promise<boolean> {
+  if (mainContainer?.isConnected) return true;
+
+  const nextContainer = await findMainContainer();
+  if (!nextContainer) return false;
+
+  const containerChanged = nextContainer !== mainContainer;
+  if (containerChanged && mutationObserver) {
+    stopObserver();
+  }
+
+  mainContainer = nextContainer;
+  injector.detectTheme(mainContainer);
+
+  if (state !== 'idle' && !mutationObserver) {
+    startObserver();
+  }
+
+  return true;
+}
+
 async function runTranslationPass() {
-  if (!mainContainer) return false;
+  const ready = await ensureMainContainerReady();
+  if (!ready || !mainContainer) return false;
 
   const config = await loadProviderConfig();
   injector.setTargetLanguage(config.targetLanguage);
 
   const includeElement = getTranslationIncludeElement();
-  if (!translator.hasPendingWork(mainContainer, { includeElement })) {
+  const options = { includeElement, shouldSkipElement: shouldSkipRenderedElement };
+  if (!translator.hasPendingWork(mainContainer, options)) {
     return false;
   }
 
   state = 'translating';
   latestProgress = { completed: 0, total: 0 };
   progressBar.show();
-  await translator.start(mainContainer, config.targetLanguage, { includeElement });
+  await translator.start(mainContainer, config.targetLanguage, options);
   return true;
 }
 
@@ -158,24 +197,17 @@ async function startTranslation() {
   pendingIncrementalTranslation = false;
   pendingNewContent = false;
   latestProgress = { completed: 0, total: 0 };
-  pendingRestoreIds.clear();
   injector.setVisibility(true);
-
-  mainContainer = await findMainContainer();
-  injector.detectTheme(mainContainer);
 
   const started = await runTranslationPass();
   if (!started) {
-    state = 'done';
-    reportTranslateStatus('done', latestProgress);
+    markTranslationDone();
   }
 
   startObserver();
 }
 
 async function startIncrementalTranslation() {
-  if (!mainContainer) return false;
-
   pendingNewContent = false;
   return runTranslationPass();
 }
@@ -185,7 +217,6 @@ function cancelTranslation() {
   pendingIncrementalTranslation = false;
   pendingNewContent = false;
   latestProgress = { completed: 0, total: 0 };
-  pendingRestoreIds.clear();
   translator.cancel();
   injector.hideAll();
   stopObserver();
@@ -202,12 +233,13 @@ function scheduleDomWork(delay = DOM_WORK_DEBOUNCE_MS) {
 }
 
 async function flushDomWork() {
-  if (domWorkInProgress || isScrollActive || !mainContainer) return;
+  if (domWorkInProgress || isScrollActive) return;
+
+  const ready = await ensureMainContainerReady();
+  if (!ready || !mainContainer) return;
 
   domWorkInProgress = true;
   try {
-    restorePendingTranslationsNearViewport();
-
     const shouldTryIncremental = pendingNewContent || (useViewportLazyTranslation && state === 'done');
     if (!shouldTryIncremental) return;
 
@@ -223,94 +255,41 @@ async function flushDomWork() {
     await startIncrementalTranslation();
   } finally {
     domWorkInProgress = false;
-    if ((pendingRestoreIds.size > 0 || pendingNewContent) && !isScrollActive) {
+    if (pendingNewContent && !isScrollActive) {
       scheduleDomWork();
     }
   }
 }
 
-function restorePendingTranslationsNearViewport() {
-  if (pendingRestoreIds.size === 0) return;
-
-  const idsToRestore: string[] = [];
-  const idsToDrop: string[] = [];
-
-  for (const ntId of pendingRestoreIds) {
-    const sourceEl = injector.getSourceElementByTranslationId(ntId);
-    if (!sourceEl || !sourceEl.isConnected) {
-      idsToDrop.push(ntId);
-      continue;
-    }
-
-    if (isNearViewport(sourceEl)) {
-      idsToRestore.push(ntId);
-      if (idsToRestore.length >= RESTORE_BATCH_LIMIT) break;
-    }
-  }
-
-  for (const ntId of idsToDrop) {
-    pendingRestoreIds.delete(ntId);
-  }
-
-  if (idsToRestore.length === 0) return;
-
-  const anchor = captureViewportAnchor();
-
-  for (const ntId of idsToRestore) {
-    const restored = injector.restoreTranslationById(ntId);
-    pendingRestoreIds.delete(ntId);
-    if (!restored) continue;
-  }
-
-  if (anchor?.element.isConnected) {
-    const delta = anchor.element.getBoundingClientRect().top - anchor.top;
-    if (Math.abs(delta) >= 1) {
-      window.scrollBy(0, delta);
-    }
-  }
-}
-
-function isNearViewport(el: Element, margin = RESTORE_VIEWPORT_MARGIN_PX): boolean {
+function isNearViewport(el: Element, margin = VIEWPORT_TRANSLATION_MARGIN_PX): boolean {
   const rect = el.getBoundingClientRect();
   return rect.bottom >= -margin
     && rect.top <= window.innerHeight + margin;
 }
 
-function captureViewportAnchor(): { element: Element; top: number } | null {
-  if (window.innerWidth <= 0 || window.innerHeight <= 0) return null;
-
-  const x = Math.min(Math.max(Math.round(window.innerWidth / 2), 1), Math.max(window.innerWidth - 1, 1));
-  const y = Math.min(Math.max(Math.round(Math.min(window.innerHeight * 0.25, 160)), 1), Math.max(window.innerHeight - 1, 1));
-
-  let anchor = document.elementFromPoint(x, y);
-  while (anchor && (anchor.classList.contains('nt-translation') || anchor.classList.contains('nt-progress-container'))) {
-    anchor = anchor.parentElement;
-  }
-
-  return anchor && anchor.isConnected
-    ? { element: anchor, top: anchor.getBoundingClientRect().top }
-    : null;
+function hasRemovedTranslationNode(node: Node): boolean {
+  return node instanceof Element
+    && (node.matches('.nt-translation[data-nt-id]')
+      || node.querySelector('.nt-translation[data-nt-id]') !== null);
 }
 
-function collectRemovedTranslationIds(node: Node) {
-  if (!(node instanceof Element)) return;
+function isObservedMutationRelevant(target: Element): boolean {
+  if (!mainContainer) return false;
+  return !mainContainer.isConnected || mainContainer.contains(target) || target.contains(mainContainer);
+}
 
-  const candidates: Element[] = [];
-  if (node.matches('.nt-translation[data-nt-id]')) {
-    candidates.push(node);
-  }
-  candidates.push(...node.querySelectorAll('.nt-translation[data-nt-id]'));
-
-  for (const candidate of candidates) {
-    const ntId = candidate.getAttribute('data-nt-id');
-    if (ntId) {
-      pendingRestoreIds.add(ntId);
-    }
-  }
+function isNextTranslateElement(node: Element): boolean {
+  return node.matches('[data-nt], .nt-progress-container, .nt-orphan-banner')
+    || node.closest('[data-nt], .nt-progress-container, .nt-orphan-banner') !== null;
 }
 
 function handleScroll() {
-  if (pendingRestoreIds.size === 0 && !pendingNewContent && !useViewportLazyTranslation) return;
+  if (mainContainer && !mainContainer.isConnected) {
+    pendingNewContent = true;
+    scheduleDomWork(0);
+  }
+
+  if (!pendingNewContent && !useViewportLazyTranslation) return;
 
   isScrollActive = true;
   if (scrollIdleTimer) clearTimeout(scrollIdleTimer);
@@ -329,36 +308,40 @@ function startObserver() {
 
   mutationObserver = new MutationObserver((mutations) => {
     let hasNewContent = false;
+    let removedTranslationNode = false;
 
     for (const m of mutations) {
+      const mutationTarget = m.target instanceof Element ? m.target : m.target.parentElement;
+      if (!mutationTarget || !isObservedMutationRelevant(mutationTarget)) continue;
+
       if (m.type === 'characterData') {
         const parent = m.target.parentElement;
-        if (parent && !parent.closest('.nt-translation')) {
+        if (parent && !parent.closest('.nt-translation') && !isNextTranslateElement(parent)) {
           hasNewContent = true;
         }
         continue;
       }
 
       for (const node of m.addedNodes) {
-        if (node instanceof Element && !node.className?.split?.(' ').some((c: string) => c.startsWith('nt-'))) {
+        if (node instanceof Element && !isNextTranslateElement(node)) {
           hasNewContent = true;
         }
       }
       for (const node of m.removedNodes) {
-        collectRemovedTranslationIds(node);
+        removedTranslationNode = hasRemovedTranslationNode(node) || removedTranslationNode;
+        if (node instanceof Element && !isNextTranslateElement(node)) {
+          hasNewContent = true;
+        }
       }
     }
 
-    if (hasNewContent) {
+    if (hasNewContent || removedTranslationNode) {
       pendingNewContent = true;
-    }
-
-    if (pendingRestoreIds.size > 0 || hasNewContent) {
       scheduleDomWork();
     }
   });
 
-  mutationObserver.observe(mainContainer, { childList: true, characterData: true, subtree: true });
+  mutationObserver.observe(document.body, { childList: true, characterData: true, subtree: true });
 }
 
 function stopObserver() {
@@ -394,7 +377,6 @@ function handleSpaNavigation(nextUrl?: string) {
   pendingIncrementalTranslation = false;
   pendingNewContent = false;
   latestProgress = { completed: 0, total: 0 };
-  pendingRestoreIds.clear();
   injector.removeAll();
   translator.resetState();
   stopObserver();

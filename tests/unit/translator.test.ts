@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { fnv1a } from '../../src/content/translator';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fnv1a, Translator } from '../../src/content/translator';
 
 describe('fnv1a hash', () => {
   it('相同输入产生相同 hash', () => {
@@ -12,5 +12,42 @@ describe('fnv1a hash', () => {
     const hash1 = fnv1a('hello\0Simplified Chinese');
     const hash2 = fnv1a('hello\0Japanese');
     expect(hash1).not.toBe(hash2);
+  });
+});
+
+describe('Translator incremental re-render handling', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '<main><p id="p1">Hello world from translator test.</p></main>';
+
+    vi.stubGlobal('chrome', {
+      runtime: {
+        id: 'test-extension',
+        sendMessage: vi.fn((message: { type: string }) => {
+          if (message.type === 'TRANSLATE_BATCH') {
+            return Promise.resolve({ batchId: 'b1', translations: ['你好，翻译测试。'] });
+          }
+          return Promise.resolve({});
+        }),
+      },
+    });
+  });
+
+  it('当源元素已翻译但译文节点丢失时，应重新视为待处理内容', async () => {
+    const container = document.querySelector('main')!;
+
+    let translator!: Translator;
+    await new Promise<void>((resolve) => {
+      translator = new Translator({
+        onBatchTranslated: () => {},
+        onProgress: () => {},
+        onComplete: () => resolve(),
+        onError: () => resolve(),
+        onCancelled: () => resolve(),
+      });
+      void translator.start(container, 'Simplified Chinese');
+    });
+
+    expect(translator.hasPendingWork(container, { shouldSkipElement: () => true })).toBe(false);
+    expect(translator.hasPendingWork(container, { shouldSkipElement: () => false })).toBe(true);
   });
 });

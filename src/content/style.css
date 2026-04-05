@@ -110,3 +110,63 @@
   cursor: pointer !important;
   font-size: 13px !important;
 }
+
+/* === Inline paragraph loading: pending dots === */
+
+.nt-pending-dots[data-nt] {
+  display: inline-block !important;
+  margin-left: 0.3em !important;
+  color: #4A90D9 !important;
+  user-select: none !important;
+  animation: nt-dot-fade 1.4s ease-in-out infinite !important;
+}
+
+.nt-pending-dots[data-nt-theme="dark"] {
+  color: #5BA0E0 !important;
+}
+
+@keyframes nt-dot-fade {
+  0%, 100% { opacity: 0.2; }
+  50%       { opacity: 1;   }
+}
+
+/* === Inline paragraph loading: skeleton shimmer === */
+
+.nt-translation.nt-loading[data-nt] {
+  min-height: 1.4em !important;
+  border-radius: 3px !important;
+  background: linear-gradient(
+    90deg,
+    rgba(74, 144, 217, 0.08) 25%,
+    rgba(74, 144, 217, 0.18) 50%,
+    rgba(74, 144, 217, 0.08) 75%
+  ) !important;
+  background-size: 200% 100% !important;
+  animation: nt-shimmer 1.6s ease-in-out infinite !important;
+}
+
+.nt-translation.nt-loading[data-nt-theme="dark"] {
+  background: linear-gradient(
+    90deg,
+    rgba(91, 160, 224, 0.08) 25%,
+    rgba(91, 160, 224, 0.18) 50%,
+    rgba(91, 160, 224, 0.08) 75%
+  ) !important;
+  background-size: 200% 100% !important;
+}
+
+@keyframes nt-shimmer {
+  0%   { background-position: 200% 0;  }
+  100% { background-position: -200% 0; }
+}
+
+/* === Inline paragraph loading: reveal fade-in === */
+
+.nt-translation.nt-reveal[data-nt] {
+  animation: nt-fade-in 0.25s ease-out !important;
+}
+
+@keyframes nt-fade-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
