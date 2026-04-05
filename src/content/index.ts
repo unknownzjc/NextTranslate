@@ -1,10 +1,15 @@
 import type { ToggleTranslateResponse, TranslateStatusMsg } from '@shared/messages';
-import { loadProviderConfig } from '@shared/storage';
+import { CONTENT_SCRIPT_READY_KEY } from '@shared/content-ui';
+import { isProviderConfigured, loadProviderConfig } from '@shared/storage';
+import type { ProviderConfig } from '@shared/types';
 import { findMainContainer } from './extractor';
 import { getMainDomain } from './compat';
 import { Translator } from './translator';
 import { Injector } from './injector';
 import { ProgressBar } from './progress';
+import { FloatingBall } from './floating-ball';
+
+(window as unknown as Record<string, unknown>)[CONTENT_SCRIPT_READY_KEY] = true;
 
 // --- State ---
 
@@ -30,11 +35,57 @@ let latestProgress = { completed: 0, total: 0 };
 const injector = new Injector();
 const progressBar = new ProgressBar();
 const useViewportLazyTranslation = getMainDomain(location.hostname) === 'x.com';
+const floatingBall = new FloatingBall(() => {
+  void handleFloatingBallClick();
+});
+let floatingBallErrorTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearFloatingBallErrorTimer() {
+  if (!floatingBallErrorTimer) return;
+  clearTimeout(floatingBallErrorTimer);
+  floatingBallErrorTimer = null;
+}
+
+function syncFloatingBallState() {
+  clearFloatingBallErrorTimer();
+
+  if (state === 'translating') {
+    floatingBall.setState({ mode: 'translating', progress: latestProgress });
+    return;
+  }
+
+  if (state === 'done') {
+    floatingBall.setState({ mode: 'translated', visible: translationsVisible });
+    return;
+  }
+
+  floatingBall.setState({ mode: 'idle' });
+}
+
+function showFloatingBallError(message: string) {
+  clearFloatingBallErrorTimer();
+  floatingBall.setState({ mode: 'error', message });
+  floatingBallErrorTimer = setTimeout(() => {
+    floatingBallErrorTimer = null;
+    syncFloatingBallState();
+  }, 2800);
+}
+
+function updateFloatingBallFromResponse(response: ToggleTranslateResponse) {
+  if (response.action === 'busy') return;
+  syncFloatingBallState();
+}
+
+async function handleFloatingBallClick() {
+  const response = handleToggle();
+  updateFloatingBallFromResponse(response);
+}
 
 function markTranslationDone() {
   state = 'done';
   progressBar.complete();
   reportTranslateStatus('done', latestProgress);
+  syncFloatingBallState();
 }
 
 function reportTranslateStatus(
@@ -75,6 +126,7 @@ const translator = new Translator({
     latestProgress = { completed, total };
     progressBar.update(completed, total);
     reportTranslateStatus('translating', latestProgress);
+    syncFloatingBallState();
   },
   onBlocksQueued: (elements) => {
     for (const el of elements) {
@@ -95,14 +147,22 @@ const translator = new Translator({
     markTranslationDone();
   },
   onError: (error) => {
+    state = 'idle';
+    pendingIncrementalTranslation = false;
+    pendingNewContent = false;
     injector.clearLoadingIndicators();
     progressBar.error(error);
     reportTranslateStatus('error', latestProgress, error);
+    stopObserver();
+    showFloatingBallError(error);
   },
   onCancelled: () => {
     state = 'idle';
+    pendingIncrementalTranslation = false;
+    pendingNewContent = false;
     injector.clearLoadingIndicators();
     progressBar.hide();
+    syncFloatingBallState();
   },
 });
 
@@ -122,7 +182,7 @@ function handleToggle(): ToggleTranslateResponse {
   try {
     switch (state) {
       case 'idle':
-        startTranslation();
+        void startTranslation();
         return { action: 'started' };
 
       case 'translating':
@@ -132,6 +192,7 @@ function handleToggle(): ToggleTranslateResponse {
       case 'done':
         translationsVisible = !translationsVisible;
         injector.setVisibility(translationsVisible);
+        syncFloatingBallState();
         return { action: translationsVisible ? 'toggled_visible' : 'toggled_hidden' };
     }
   } finally {
@@ -171,12 +232,12 @@ async function ensureMainContainerReady(): Promise<boolean> {
   return true;
 }
 
-async function runTranslationPass() {
+async function runTranslationPass(config?: ProviderConfig) {
   const ready = await ensureMainContainerReady();
   if (!ready || !mainContainer) return false;
 
-  const config = await loadProviderConfig();
-  injector.setTargetLanguage(config.targetLanguage);
+  const currentConfig = config ?? await loadProviderConfig();
+  injector.setTargetLanguage(currentConfig.targetLanguage);
 
   const includeElement = getTranslationIncludeElement();
   const options = { includeElement, shouldSkipElement: shouldSkipRenderedElement };
@@ -187,7 +248,8 @@ async function runTranslationPass() {
   state = 'translating';
   latestProgress = { completed: 0, total: 0 };
   progressBar.show();
-  await translator.start(mainContainer, config.targetLanguage, options);
+  syncFloatingBallState();
+  await translator.start(mainContainer, currentConfig.targetLanguage, options);
   return true;
 }
 
@@ -198,8 +260,20 @@ async function startTranslation() {
   pendingNewContent = false;
   latestProgress = { completed: 0, total: 0 };
   injector.setVisibility(true);
+  syncFloatingBallState();
 
-  const started = await runTranslationPass();
+  const config = await loadProviderConfig();
+  if (!isProviderConfigured(config)) {
+    state = 'idle';
+    const error = '请先在扩展弹窗中完成翻译配置';
+    progressBar.show();
+    progressBar.error(error);
+    reportTranslateStatus('error', latestProgress, error);
+    showFloatingBallError(error);
+    return;
+  }
+
+  const started = await runTranslationPass(config);
   if (!started) {
     markTranslationDone();
   }
@@ -220,6 +294,7 @@ function cancelTranslation() {
   translator.cancel();
   injector.hideAll();
   stopObserver();
+  syncFloatingBallState();
 }
 
 // --- Deferred DOM work ---
@@ -381,6 +456,7 @@ function handleSpaNavigation(nextUrl?: string) {
   translator.resetState();
   stopObserver();
   mainContainer = null;
+  syncFloatingBallState();
 }
 
 window.addEventListener('popstate', () => handleSpaNavigation());
