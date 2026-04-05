@@ -72,6 +72,22 @@ describe('Injector', () => {
     expect(injector.hasTranslation(p1)).toBe(false);
   });
 
+  it('GitHub PR 列表标题在仅检查 hasTranslation 时不会提前创建 host wrapper', () => {
+    document.body.innerHTML = `
+      <div class="flex-auto min-width-0 p-2" id="pr-cell">
+        <a id="pr-list-title" class="markdown-title" href="/foo/bar/pull/42">Pull request title with enough text</a>
+        <span class="IssueLabel">priority/p1</span>
+        <div class="d-flex mt-1 text-small color-fg-muted">#42 opened by alice</div>
+      </div>
+    `;
+
+    const title = document.getElementById('pr-list-title')!;
+    title.setAttribute('data-nt-id', '123');
+
+    expect(injector.hasTranslation(title)).toBe(false);
+    expect(document.querySelector('.nt-github-pr-title-line')).toBeNull();
+  });
+
   it('GitHub issue 列表标题会把 dots 和译文挂到标题+label 容器上', () => {
     document.body.innerHTML = `
       <div data-listview-item-title-container="true">

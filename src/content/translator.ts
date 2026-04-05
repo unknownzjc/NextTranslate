@@ -189,6 +189,19 @@ export class Translator {
 
         if (runId !== this.runId || !this.batchMap.has(batchId)) return;
 
+        if (result.cancelled) {
+          retries++;
+          if (retries >= SW_RETRY_MAX) {
+            this.stopKeepalive();
+            this.callbacks.onError('页面仍在加载中，翻译已中止，请稍后重试');
+            return;
+          }
+          const jitter = 1 + (Math.random() * 0.4 - 0.2);
+          const delay = Math.min(400 * Math.pow(2, retries - 1) * jitter, 5000);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+
         if (result.error) {
           this.stopKeepalive();
           this.callbacks.onError(result.error);

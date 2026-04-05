@@ -94,11 +94,6 @@ export function parseJsonModeResponse(raw: string, expectedCount: number): Parse
     return null;
   }
 
-  // Single paragraph fallback: use raw text as translation
-  if (expectedCount === 1) {
-    return { translations: [text] };
-  }
-
   return null;
 }
 

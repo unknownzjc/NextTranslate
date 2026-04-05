@@ -68,9 +68,9 @@ describe('parseJsonModeResponse', () => {
     expect(result).toEqual({ translations: ['你好'] });
   });
 
-  it('单段时非法 JSON 回退为原始文本', () => {
+  it('单段时非法 JSON 不再回退为原始文本', () => {
     const result = parseJsonModeResponse('你好世界', 1);
-    expect(result).toEqual({ translations: ['你好世界'] });
+    expect(result).toBeNull();
   });
 });
 

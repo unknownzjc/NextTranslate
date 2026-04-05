@@ -12,8 +12,13 @@ import type {
 
 // --- Types ---
 
+interface PendingRequest {
+  controller: AbortController;
+  sendResponse: (result: TranslateBatchResult) => void;
+}
+
 interface TabState {
-  abortControllers: Map<string, AbortController>;
+  pendingRequests: Map<string, PendingRequest>;
   completedBatches: number;
   totalBatches: number;
   status: 'translating' | 'done' | 'cancelled' | 'error';
@@ -99,11 +104,19 @@ function drain() {
   }
 }
 
+function createCancelledBatchResult(batchId: string): TranslateBatchResult {
+  return {
+    batchId,
+    translations: [],
+    cancelled: true,
+  };
+}
+
 async function processItem(item: QueueItem) {
   const { tabId, message, sendResponse } = item;
   const state = getOrCreateTabState(tabId);
   const controller = new AbortController();
-  state.abortControllers.set(message.batchId, controller);
+  state.pendingRequests.set(message.batchId, { controller, sendResponse });
   state.status = 'translating';
   syncAlarmKeepalive();
 
@@ -166,7 +179,9 @@ async function processItem(item: QueueItem) {
         await saveProviderConfig({ jsonMode: 'enabled' });
         sendResponse({ batchId: message.batchId, translations: parsed.translations });
       } else {
-        sendResponse({ batchId: message.batchId, translations: [], error: 'JSON parse failed' });
+        await saveProviderConfig({ jsonMode: 'disabled' });
+        enqueue(item);
+        return;
       }
     } else if (mode === 'json') {
       const parsed = parseJsonModeResponse(rawContent, message.texts.length);
@@ -188,6 +203,11 @@ async function processItem(item: QueueItem) {
 
   } catch (err: unknown) {
     if (err instanceof Error && err.name === 'AbortError') {
+      const pending = state.pendingRequests.get(message.batchId);
+      if (pending) {
+        pending.sendResponse(createCancelledBatchResult(message.batchId));
+        state.pendingRequests.delete(message.batchId);
+      }
       return;
     }
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';
@@ -203,7 +223,7 @@ async function processItem(item: QueueItem) {
     publishTabStatus(tabId, state);
     sendResponse({ batchId: message.batchId, translations: [], error: errorMsg });
   } finally {
-    state.abortControllers.delete(message.batchId);
+    state.pendingRequests.delete(message.batchId);
     syncAlarmKeepalive();
   }
 }
@@ -222,7 +242,7 @@ function parseRetryAfter(header: string | null): number | null {
 function getOrCreateTabState(tabId: number): TabState {
   if (!tabStates.has(tabId)) {
     tabStates.set(tabId, {
-      abortControllers: new Map(),
+      pendingRequests: new Map(),
       completedBatches: 0,
       totalBatches: 0,
       status: 'translating',
@@ -235,12 +255,18 @@ function getOrCreateTabState(tabId: number): TabState {
 function clearTabState(tabId: number) {
   const state = tabStates.get(tabId);
   if (state) {
-    for (const controller of state.abortControllers.values()) {
-      controller.abort();
+    for (const [batchId, pending] of state.pendingRequests) {
+      pending.controller.abort();
+      pending.sendResponse(createCancelledBatchResult(batchId));
     }
+    state.pendingRequests.clear();
   }
   tabStates.delete(tabId);
 
+  const queuedItems = tabQueues.get(tabId) ?? [];
+  for (const item of queuedItems) {
+    item.sendResponse(createCancelledBatchResult(item.message.batchId));
+  }
   tabQueues.delete(tabId);
   const idx = activeTabIds.indexOf(tabId);
   if (idx !== -1) activeTabIds.splice(idx, 1);
@@ -290,7 +316,7 @@ function publishTabStatus(tabId: number, state: TabState) {
 
 function hasActiveTranslations(): boolean {
   return Array.from(tabStates.values()).some((state) =>
-    state.status === 'translating' || state.abortControllers.size > 0
+    state.status === 'translating' || state.pendingRequests.size > 0
   );
 }
 
