@@ -16,8 +16,8 @@ const LANG_MAP: Record<string, string> = {
 
 export class Injector {
   private ntIdCounter = 0;
-  private translationMap = new Map<string, { sourceEl: WeakRef<Element>; translatedText: string }>();
   private translationElements = new Set<HTMLElement>();
+  private pendingDotsElements = new Set<HTMLElement>();
   private theme: 'light' | 'dark' = 'light';
   private targetLanguage = 'Simplified Chinese';
   private visible = true;
@@ -68,17 +68,76 @@ export class Injector {
       this.translationElements.add(translationEl);
     }
 
+    // Transition from loading skeleton to real text
+    if (translationEl.classList.contains('nt-loading')) {
+      translationEl.classList.remove('nt-loading');
+      translationEl.classList.add('nt-reveal');
+      setTimeout(() => translationEl!.classList.remove('nt-reveal'), 300);
+    }
+
     translationEl.textContent = translatedText;
 
-    this.translationMap.set(ntId, {
-      sourceEl: new WeakRef(sourceEl),
-      translatedText,
-    });
+    // Remove the pending dots from the source element
+    const dotsEl = sourceEl.querySelector('.nt-pending-dots[data-nt]');
+    if (dotsEl) {
+      this.pendingDotsElements.delete(dotsEl as HTMLElement);
+      dotsEl.remove();
+    }
+
+  }
+
+  showLoadingPlaceholder(sourceEl: Element) {
+    // Assign ntId now so insertTranslation can find the placeholder later
+    let ntId = sourceEl.getAttribute('data-nt-id');
+    if (!ntId) {
+      ntId = String(this.ntIdCounter++);
+      sourceEl.setAttribute('data-nt-id', ntId);
+    }
+
+    // Don't double-insert if already a placeholder or real translation
+    if (this.findExistingTranslation(sourceEl, ntId)) return;
+
+    // 1. Append animated dots at the end of the source element text
+    const dotsEl = document.createElement('span');
+    dotsEl.className = 'nt-pending-dots';
+    dotsEl.setAttribute('data-nt', '');
+    dotsEl.setAttribute('data-nt-theme', this.theme);
+    dotsEl.textContent = '···';
+    sourceEl.appendChild(dotsEl);
+    this.pendingDotsElements.add(dotsEl);
+
+    // 2. Insert shimmer skeleton placeholder at the translation position
+    const placeholderEl = document.createElement('span');
+    placeholderEl.className = 'nt-translation nt-loading';
+    placeholderEl.setAttribute('data-nt', '');
+    placeholderEl.setAttribute('data-nt-id', ntId);
+    placeholderEl.setAttribute('data-nt-theme', this.theme);
+    placeholderEl.setAttribute('lang', LANG_MAP[this.targetLanguage] ?? 'zh-CN');
+    placeholderEl.style.display = this.visible ? '' : 'none';
+
+    if (shouldAppendInside(sourceEl)) {
+      sourceEl.appendChild(placeholderEl);
+    } else {
+      sourceEl.parentNode?.insertBefore(placeholderEl, sourceEl.nextSibling);
+    }
+    this.translationElements.add(placeholderEl);
+  }
+
+  clearLoadingIndicators() {
+    for (const el of this.pendingDotsElements) el.remove();
+    this.pendingDotsElements.clear();
+    for (const el of this.translationElements) {
+      el.classList.remove('nt-loading', 'nt-reveal');
+    }
   }
 
   setVisibility(visible: boolean) {
     this.visible = visible;
     this.pruneDetachedTranslations();
+
+    if (!visible) {
+      this.clearLoadingIndicators();
+    }
 
     for (const el of this.translationElements) {
       el.style.display = visible ? '' : 'none';
@@ -90,13 +149,13 @@ export class Injector {
   }
 
   removeAll() {
+    this.clearLoadingIndicators();
     this.pruneDetachedTranslations();
 
     for (const el of this.translationElements) {
       el.remove();
     }
     this.translationElements.clear();
-    this.translationMap.clear();
     document.querySelectorAll('[data-nt-id]').forEach(el => {
       if (!el.classList.contains('nt-translation')) {
         el.removeAttribute('data-nt-id');
@@ -104,17 +163,11 @@ export class Injector {
     });
   }
 
-  restoreTranslationById(ntId: string): boolean {
-    const data = this.translationMap.get(ntId);
-    const sourceEl = data?.sourceEl.deref();
-    if (!data || !sourceEl || !sourceEl.isConnected) return false;
+  hasTranslation(sourceEl: Element): boolean {
+    const ntId = sourceEl.getAttribute('data-nt-id');
+    if (!ntId) return false;
 
-    this.insertTranslation(sourceEl, data.translatedText);
-    return true;
-  }
-
-  getSourceElementByTranslationId(ntId: string): Element | null {
-    return this.translationMap.get(ntId)?.sourceEl.deref() ?? null;
+    return this.findExistingTranslation(sourceEl, ntId) !== null;
   }
 
   private findExistingTranslation(sourceEl: Element, ntId: string): HTMLElement | null {
