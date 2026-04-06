@@ -6,11 +6,13 @@ export { getMainDomain };
 // Provides site-specific overrides for content extraction on major websites.
 // Modeled after FluentRead's compat.ts, adapted for NextTranslate's architecture.
 
+export type SiteSkipContext = 'page' | 'quick';
+
 export interface SiteCompat {
   /** CSS selector for the main content container. Tried before defuddle. */
   containerSelector?: string;
   /** Extra element skip checks beyond the generic shouldSkipElement logic. */
-  shouldSkip?: (el: Element) => boolean;
+  shouldSkip?: (el: Element, context?: SiteSkipContext) => boolean;
   /** Additional tag names to treat as translatable paragraphs. */
   extraParagraphTags?: Set<string>;
   /**
@@ -200,7 +202,7 @@ const githubCompat: SiteCompat = {
     '.email-fragment',
   ].join(', '),
   paragraphSelectorOnly: (pathname: string) => isGitHubListPage(pathname),
-  shouldSkip(el: Element): boolean {
+  shouldSkip(el: Element, context: SiteSkipContext = 'page'): boolean {
     const tag = el.tagName;
     if (tag === 'svg' || tag === 'PRE' || tag === 'CODE') return true;
     if (el.matches('h1[data-component="PH_Title"]')) return true;
@@ -222,8 +224,12 @@ const githubCompat: SiteCompat = {
     if (el.closest('.commit-tease, .Counter, .IssueLabel, .label-link, .topic-tag')) return true;
     if (el.closest('.btn, .BtnGroup, .social-count, .starring-container')) return true;
 
-    // Skip UI headings outside markdown content; title is handled by paragraphSelector.
-    if (/^H[1-6]$/.test(tag) && !el.closest('.markdown-body, .comment-body, .email-fragment, [data-listview-item-title-container], h1[data-component="PH_Title"]') && !isGitHubRepoAboutText(el)) {
+    // Page extraction skips generic GitHub UI headings aggressively, but quick hover
+    // translation should still allow local leaf headings such as dashboard/feed titles.
+    if (context === 'page'
+      && /^H[1-6]$/.test(tag)
+      && !el.closest('.markdown-body, .comment-body, .email-fragment, [data-listview-item-title-container], h1[data-component="PH_Title"]')
+      && !isGitHubRepoAboutText(el)) {
       return true;
     }
 

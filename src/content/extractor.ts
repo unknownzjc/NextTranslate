@@ -1,5 +1,5 @@
 import Defuddle from 'defuddle';
-import { getSiteCompat, type SiteCompat } from './compat';
+import { getSiteCompat, type SiteCompat, type SiteSkipContext } from './compat';
 
 // --- Constants ---
 
@@ -24,7 +24,7 @@ export function isChineseDominant(text: string): boolean {
 
 // --- Element filtering ---
 
-export function shouldSkipElement(el: Element, compat?: SiteCompat): boolean {
+export function shouldSkipElement(el: Element, compat?: SiteCompat, context: SiteSkipContext = 'page'): boolean {
   if (el.className && typeof el.className === 'string' && el.className.split(' ').some(c => c.startsWith('nt-'))) {
     return true;
   }
@@ -34,7 +34,7 @@ export function shouldSkipElement(el: Element, compat?: SiteCompat): boolean {
   if (el.closest('nav, [role="navigation"]')) return true;
 
   // Site-specific skip rules
-  if (compat?.shouldSkip?.(el)) return true;
+  if (compat?.shouldSkip?.(el, context)) return true;
 
   const text = (el.textContent ?? '').replace(/\s/g, '');
   if (text.length < MIN_TEXT_LENGTH) return true;
@@ -324,7 +324,7 @@ function hasQuickTranslateDescendantBlock(el: Element, compat?: SiteCompat): boo
     : `${PARAGRAPH_SELECTOR},${QUICK_TRANSLATE_SELECTOR}`;
 
   for (const desc of el.querySelectorAll(selector)) {
-    if (shouldSkipElement(desc, compat)) continue;
+    if (shouldSkipElement(desc, compat, 'quick')) continue;
     if (isLinkHeavy(desc)) continue;
     if (!hasMeaningfulText(desc)) continue;
     return true;
@@ -343,7 +343,7 @@ function isEligibleQuickTranslateElement(el: Element, compat?: SiteCompat): bool
   const isGenericContainer = QUICK_TRANSLATE_CONTAINER_TAGS.has(el.tagName);
   if (!isParagraphTag && !matchesSelector && !isGenericContainer) return false;
 
-  if (shouldSkipElement(el, compat)) return false;
+  if (shouldSkipElement(el, compat, 'quick')) return false;
   if (isLinkHeavy(el)) return false;
   if (!hasMeaningfulText(el)) return false;
 
