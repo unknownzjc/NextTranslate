@@ -6,7 +6,7 @@ describe('FloatingBall', () => {
     document.body.innerHTML = '';
   });
 
-  it('翻译中时右下角显示省略号呼吸徽标，不显示批次进度', () => {
+  it('翻译中时右下角只显示省略号呼吸徽标，不显示 tips', () => {
     const floatingBall = new FloatingBall(() => {});
     floatingBall.setState({ mode: 'translating' });
 
@@ -15,8 +15,7 @@ describe('FloatingBall', () => {
     const badge = document.querySelector('.nt-fab-badge') as HTMLSpanElement;
 
     expect(button.getAttribute('data-badge')).toBe('loading');
-    expect(hint.textContent).toBe('翻译中...');
-    expect(hint.textContent).not.toContain('/');
+    expect(hint.textContent).toBe('');
     expect(badge.textContent).toBe('...');
 
     floatingBall.destroy();

@@ -7,7 +7,9 @@ import {
   estimateTokens,
   splitIntoBatches,
   collectParagraphs,
+  extractQuickTranslateParagraph,
   findMainContainer,
+  resolveHoverParagraphCandidate,
 } from '../../src/content/extractor';
 
 describe('isChineseDominant', () => {
@@ -477,5 +479,154 @@ describe('splitIntoBatches', () => {
     const texts = [shortText, longText, shortText];
     const batches = splitIntoBatches(texts, 2000);
     expect(batches.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('resolveHoverParagraphCandidate', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('普通 <p> 能解析为自身', () => {
+    const p = document.createElement('p');
+    p.textContent = 'Hello world, this is a test paragraph with enough text';
+    document.body.appendChild(p);
+    expect(resolveHoverParagraphCandidate(p)).toBe(p);
+  });
+
+  it('子节点 hover 能向上解析到段落元素', () => {
+    const p = document.createElement('p');
+    p.textContent = 'Hello world, this is a test paragraph';
+    const em = document.createElement('em');
+    em.textContent = 'emphasized text inside paragraph';
+    p.appendChild(em);
+    document.body.appendChild(p);
+    expect(resolveHoverParagraphCandidate(em)).toBe(p);
+  });
+
+  it('短文本不返回候选', () => {
+    const p = document.createElement('p');
+    p.textContent = 'Hi';
+    document.body.appendChild(p);
+    expect(resolveHoverParagraphCandidate(p)).toBeNull();
+  });
+
+  it('中文主导文本不返回候选', () => {
+    const p = document.createElement('p');
+    p.textContent = '这是一段中文文字测试内容';
+    document.body.appendChild(p);
+    expect(resolveHoverParagraphCandidate(p)).toBeNull();
+  });
+
+  it('已注入的 nt- 节点不返回候选', () => {
+    const span = document.createElement('span');
+    span.className = 'nt-translation';
+    span.setAttribute('data-nt', '');
+    span.textContent = 'This is translated text that should not be a candidate';
+    document.body.appendChild(span);
+    expect(resolveHoverParagraphCandidate(span)).toBeNull();
+  });
+
+  it('link-heavy 导航块不会被识别为候选', () => {
+    const nav = document.createElement('p');
+    nav.innerHTML = `
+      <a href="/a">Link one text here</a>
+      <a href="/b">Link two text here</a>
+      <a href="/c">Link three text here</a>
+    `;
+    document.body.appendChild(nav);
+    expect(resolveHoverParagraphCandidate(nav)).toBeNull();
+  });
+
+  it('含可独立 descendant paragraph 的父容器不会被误识别，但子段落仍可触发', () => {
+    const div = document.createElement('div');
+    const p1 = document.createElement('p');
+    p1.textContent = 'First child paragraph with enough text for translation';
+    const p2 = document.createElement('p');
+    p2.textContent = 'Second child paragraph with enough text for translation';
+    div.appendChild(p1);
+    div.appendChild(p2);
+    document.body.appendChild(div);
+    expect(resolveHoverParagraphCandidate(div)).toBeNull();
+    expect(resolveHoverParagraphCandidate(p1)).toBe(p1);
+  });
+
+  it('可编辑元素内不返回候选', () => {
+    const p = document.createElement('p');
+    p.textContent = 'This is a paragraph inside an editable area for testing';
+    const textarea = document.createElement('textarea');
+    textarea.textContent = 'This is a textarea with enough text';
+    document.body.appendChild(textarea);
+    expect(resolveHoverParagraphCandidate(textarea)).toBeNull();
+  });
+
+  it('input 元素不返回候选', () => {
+    const input = document.createElement('input');
+    input.value = 'Some input text content for testing';
+    document.body.appendChild(input);
+    expect(resolveHoverParagraphCandidate(input)).toBeNull();
+  });
+
+  it('[contenteditable] 区域内不返回候选', () => {
+    const div = document.createElement('div');
+    div.setAttribute('contenteditable', 'true');
+    const p = document.createElement('p');
+    p.textContent = 'This is a paragraph inside contenteditable area for testing';
+    div.appendChild(p);
+    document.body.appendChild(div);
+    expect(resolveHoverParagraphCandidate(p)).toBeNull();
+  });
+
+  it('data-nt 属性节点内不返回候选', () => {
+    const wrapper = document.createElement('div');
+    wrapper.setAttribute('data-nt', '');
+    const p = document.createElement('p');
+    p.textContent = 'This text is inside a data-nt wrapper and should be skipped';
+    wrapper.appendChild(p);
+    document.body.appendChild(wrapper);
+    expect(resolveHoverParagraphCandidate(p)).toBeNull();
+  });
+
+  it('hover quick translate 不再受 paragraphSelectorOnly 限制', () => {
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://github.com/foo/bar/issues');
+
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div class="repository-content">
+        <div data-listview-item-title-container="true">
+          <h3 id="issue-title">Issue title one with enough text</h3>
+        </div>
+        <p id="metadata">This issue metadata text can still be quick-translated when hovered.</p>
+      </div>
+    `;
+    document.body.appendChild(container);
+
+    const title = document.getElementById('issue-title')!;
+    const metadata = document.getElementById('metadata')!;
+
+    expect(resolveHoverParagraphCandidate(title)).toBe(title);
+    expect(resolveHoverParagraphCandidate(metadata)).toBe(metadata);
+  });
+
+  it('普通 div 文本块也可作为 quick translate 候选', () => {
+    const div = document.createElement('div');
+    const span = document.createElement('span');
+    span.textContent = 'A div based text block with enough content for quick translation.';
+    div.appendChild(span);
+    document.body.appendChild(div);
+
+    expect(resolveHoverParagraphCandidate(span)).toBe(div);
+    expect(extractQuickTranslateParagraph(div)?.text).toBe('A div based text block with enough content for quick translation.');
+  });
+
+  it('null target 返回 null', () => {
+    expect(resolveHoverParagraphCandidate(null)).toBeNull();
+  });
+
+  it('skip tags (code/pre) 不返回候选', () => {
+    const pre = document.createElement('pre');
+    pre.textContent = 'This is a preformatted code block with enough text';
+    document.body.appendChild(pre);
+    expect(resolveHoverParagraphCandidate(pre)).toBeNull();
   });
 });

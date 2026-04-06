@@ -50,6 +50,7 @@ export interface TranslatorCallbacks {
 export interface TranslatorStartOptions {
   includeElement?: (el: Element) => boolean;
   shouldSkipElement?: (el: Element, text: string) => boolean;
+  paragraphs?: ExtractedParagraph[];
 }
 
 export class Translator {
@@ -69,11 +70,7 @@ export class Translator {
   constructor(private callbacks: TranslatorCallbacks) {}
 
   hasPendingWork(container: Element, options: TranslatorStartOptions = {}): boolean {
-    return collectParagraphs(
-      container,
-      (el, text) => this.shouldSkipBlock(el, text, options),
-      options.includeElement,
-    ).length > 0;
+    return this.resolveParagraphs(container, options).length > 0;
   }
 
   async start(container: Element, targetLanguage: string, options: TranslatorStartOptions = {}) {
@@ -86,11 +83,7 @@ export class Translator {
     this.batchMap.clear();
     this.stopKeepalive();
 
-    const paragraphs = collectParagraphs(
-      container,
-      (el, text) => this.shouldSkipBlock(el, text, options),
-      options.includeElement,
-    );
+    const paragraphs = this.resolveParagraphs(container, options);
     if (paragraphs.length === 0) {
       this.callbacks.onComplete();
       return;
@@ -248,6 +241,18 @@ export class Translator {
     }
   }
 
+  private resolveParagraphs(container: Element, options: TranslatorStartOptions): ExtractedParagraph[] {
+    if (options.paragraphs) {
+      return options.paragraphs.filter(({ element, text }) => !this.shouldSkipBlock(element, text, options));
+    }
+
+    return collectParagraphs(
+      container,
+      (el, text) => this.shouldSkipBlock(el, text, options),
+      options.includeElement,
+    );
+  }
+
   private shouldSkipBlock(el: Element, text: string, options: TranslatorStartOptions): boolean {
     if (!this.translatedSet.has(el) || this.translatedSourceText.get(el) !== text) {
       return false;
@@ -301,6 +306,10 @@ export class Translator {
     } catch { /* may be orphaned */ }
 
     this.callbacks.onCancelled();
+  }
+
+  hasUpToDateTranslation(el: Element, text: string): boolean {
+    return this.translatedSet.has(el) && this.translatedSourceText.get(el) === text;
   }
 
   getTranslatedSet(): Set<Element> {

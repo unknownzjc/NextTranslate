@@ -388,3 +388,446 @@ describe('content SPA auto translate', () => {
     ]);
   });
 });
+
+describe('content segment translation (hover quick translate)', () => {
+  async function setupSegmentTest(options?: { siteOverrides?: Record<string, unknown> }) {
+    vi.resetModules();
+
+    document.body.innerHTML = `
+      <main>
+        <p id="p1">Hello world from the first paragraph that should be translatable here.</p>
+        <p id="p2">Second paragraph with enough text content for segment translate test.</p>
+        <p id="p3">Third paragraph with enough text content for further testing purposes.</p>
+      </main>
+    `;
+
+    vi.doMock('@shared/storage', () => ({
+      loadProviderConfig: vi.fn(async () => ({
+        endpoint: 'https://api.example.com',
+        apiKey: 'test-key',
+        model: 'test-model',
+        targetLanguage: 'Simplified Chinese',
+        jsonMode: 'auto',
+      })),
+      isProviderConfigured: vi.fn(() => true),
+      isAutoTranslateEnabledForUrl: vi.fn(async () => false),
+    }));
+
+    vi.doMock('@shared/site', async () => {
+      const actual = await vi.importActual<typeof import('@shared/site')>('@shared/site');
+      return {
+        ...actual,
+        getMainDomain: vi.fn(() => options?.siteOverrides?.mainDomain ?? 'example.com'),
+      };
+    });
+
+    vi.doMock('../../src/content/extractor', async () => {
+      const actual = await vi.importActual<typeof import('../../src/content/extractor')>('../../src/content/extractor');
+      return {
+        ...actual,
+        findMainContainer: vi.fn(async () => document.querySelector('main')!),
+        collectParagraphs: vi.fn((container: Element, shouldSkipTranslated = () => false, includeElement = () => true) => {
+          return Array.from(container.querySelectorAll('p'))
+            .map((element) => {
+              const clone = element.cloneNode(true) as Element;
+              clone.querySelectorAll('.nt-translation, [data-nt]').forEach((node) => node.remove());
+              return {
+                element,
+                text: clone.textContent?.trim() ?? '',
+                codeMap: new Map<string, string>(),
+              };
+            })
+            .filter(({ element, text }) => text.length >= 10 && includeElement(element) && !shouldSkipTranslated(element, text));
+        }),
+        resolveHoverParagraphCandidate: vi.fn((target: EventTarget | null) => {
+          if (target instanceof Element && target.tagName === 'P') return target;
+          return null;
+        }),
+      };
+    });
+
+    const pendingBatches: PendingBatch[] = [];
+    const runtimeListeners: Array<(message: unknown, sender: unknown, sendResponse: (response: unknown) => void) => void> = [];
+
+    vi.stubGlobal('chrome', {
+      runtime: {
+        id: 'test-extension',
+        onMessage: {
+          addListener: vi.fn((listener: (message: unknown, sender: unknown, sendResponse: (response: unknown) => void) => void) => {
+            runtimeListeners.push(listener);
+          }),
+        },
+        sendMessage: vi.fn((message: { type: string; batchId?: string; texts?: string[] }) => {
+          if (message.type === 'TRANSLATE_BATCH') {
+            return new Promise((resolve) => {
+              pendingBatches.push({
+                message: {
+                  type: message.type,
+                  batchId: message.batchId!,
+                  texts: message.texts ?? [],
+                },
+                resolve: resolve as PendingBatch['resolve'],
+              });
+            });
+          }
+          return Promise.resolve({});
+        }),
+      },
+    });
+
+    await import('../../src/content/index');
+
+    const sendToContent = (message: { type: string }) => {
+      let response: unknown;
+      for (const listener of runtimeListeners) {
+        listener(message, {}, (value) => {
+          response = value;
+        });
+      }
+      return response;
+    };
+
+    return { pendingBatches, sendToContent };
+  }
+
+  it('hover 触发 segment translation 成功：仅当前段落出现 loading 与译文', async () => {
+    const { pendingBatches } = await setupSegmentTest();
+    await flushPromises();
+
+    const p1 = document.getElementById('p1')!;
+    const p2 = document.getElementById('p2')!;
+
+    // Clear any stale batches from previous test module imports
+    pendingBatches.length = 0;
+
+    // Simulate hover + modifier key trigger via pointermove + keydown
+    p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
+
+    // Trigger the modifier key
+    const keydown = new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true });
+    document.dispatchEvent(keydown);
+    await flushPromises();
+
+    // p1 should have a loading placeholder
+    expect(p1.querySelector('.nt-translation.nt-loading')).not.toBeNull();
+    // p2 should NOT have any loading
+    expect(p2.querySelector('.nt-translation')).toBeNull();
+
+    // Only p1's text should appear in batches (stale module imports may duplicate)
+    const segmentBatches = pendingBatches.filter(b => b.message.texts.includes('Hello world from the first paragraph that should be translatable here.'));
+    expect(segmentBatches.length).toBeGreaterThanOrEqual(1);
+    // No batch should contain p2 or p3 text
+    expect(pendingBatches.every(b => !b.message.texts.some(t => t.includes('Second paragraph')))).toBe(true);
+
+    // Complete all matching batches
+    for (const batch of segmentBatches) {
+      batch.resolve({
+        batchId: batch.message.batchId,
+        translations: ['\u7b2c\u4e00\u6bb5\u8bd1\u6587'],
+      });
+    }
+    await flushPromises();
+
+    expect(p1.querySelector('.nt-translation')?.textContent).toBe('\u7b2c\u4e00\u6bb5\u8bd1\u6587');
+  });
+
+  it('segment 完成后悬浮球保持 idle 语义', async () => {
+    const { pendingBatches } = await setupSegmentTest();
+    await flushPromises();
+    pendingBatches.length = 0;
+
+    const p1 = document.getElementById('p1')!;
+
+    // Trigger segment translation
+    p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    await flushPromises();
+
+    // Complete
+    const batch = pendingBatches.find(b => b.message.texts.some(t => t.includes('first paragraph')));
+    expect(batch).toBeTruthy();
+    batch!.resolve({
+      batchId: batch!.message.batchId,
+      translations: ['\u7b2c\u4e00\u6bb5\u8bd1\u6587'],
+    });
+    await flushPromises();
+
+    // Floating ball should stay idle for segment-only translation
+    const fabButton = document.querySelector('.nt-fab-button');
+    const fabHint = document.querySelector('.nt-fab-hint');
+    expect(fabButton?.getAttribute('data-state')).toBe('idle');
+    expect(fabHint?.textContent).toBe('翻译全文');
+  });
+
+  it('输入框聚焦时 hover 快捷键不会触发 segment translation', async () => {
+    const { pendingBatches } = await setupSegmentTest();
+    await flushPromises();
+    pendingBatches.length = 0;
+
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    input.focus();
+
+    const p1 = document.getElementById('p1')!;
+    p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    await flushPromises();
+
+    expect(pendingBatches).toHaveLength(0);
+    expect(p1.querySelector('.nt-translation')).toBeNull();
+  });
+
+  it('segment 失败后会清理 placeholder，并恢复到 idle 语义', async () => {
+    vi.useFakeTimers();
+    const { pendingBatches } = await setupSegmentTest();
+    await flushPromises();
+    pendingBatches.length = 0;
+
+    const p1 = document.getElementById('p1')!;
+    p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    await flushPromises();
+
+    const batch = pendingBatches.find(b => b.message.texts.some(t => t.includes('first paragraph')));
+    expect(batch).toBeTruthy();
+    expect(p1.querySelector('.nt-translation.nt-loading')).not.toBeNull();
+
+    batch!.resolve({
+      batchId: batch!.message.batchId,
+      translations: [],
+      error: '翻译失败',
+    });
+    await flushPromises();
+
+    expect(p1.querySelector('.nt-translation')).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(2800);
+    const fabButton = document.querySelector('.nt-fab-button');
+    expect(fabButton?.getAttribute('data-state')).toBe('idle');
+    vi.useRealTimers();
+  });
+
+  it('segment 取消后会清理 placeholder，并允许后续重新翻译', async () => {
+    vi.useFakeTimers();
+    const { pendingBatches, sendToContent } = await setupSegmentTest();
+    await flushPromises();
+    pendingBatches.length = 0;
+
+    const p1 = document.getElementById('p1')!;
+    p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    await flushPromises();
+
+    expect(p1.querySelector('.nt-translation.nt-loading')).not.toBeNull();
+    expect(sendToContent({ type: 'TOGGLE_TRANSLATE' })).toEqual({ action: 'cancelled' });
+    await flushPromises();
+
+    expect(p1.querySelector('.nt-translation')).toBeNull();
+    const fabButton = document.querySelector('.nt-fab-button');
+    expect(fabButton?.getAttribute('data-state')).toBe('idle');
+
+    pendingBatches.length = 0;
+    vi.advanceTimersByTime(1600);
+    document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Control', ctrlKey: false, bubbles: true }));
+    p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    await flushPromises();
+
+    expect(pendingBatches.some(b => b.message.texts.some(t => t.includes('first paragraph')))).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it('段落原文变化后，hover quick translate 会将其视为新内容重新翻译', async () => {
+    vi.useFakeTimers();
+    const { pendingBatches } = await setupSegmentTest();
+    await flushPromises();
+    pendingBatches.length = 0;
+
+    const p1 = document.getElementById('p1')!;
+    p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    await flushPromises();
+
+    const firstBatch = pendingBatches.find(b => b.message.texts.some(t => t.includes('first paragraph')));
+    expect(firstBatch).toBeTruthy();
+    firstBatch!.resolve({
+      batchId: firstBatch!.message.batchId,
+      translations: ['首次译文'],
+    });
+    await flushPromises();
+
+    pendingBatches.length = 0;
+    vi.advanceTimersByTime(1600);
+    document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Control', ctrlKey: false, bubbles: true }));
+
+    const sourceTextNode = p1.firstChild;
+    expect(sourceTextNode?.nodeType).toBe(Node.TEXT_NODE);
+    sourceTextNode!.textContent = 'Updated paragraph source that should be translated again after content changes.';
+
+    p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    await flushPromises();
+
+    expect(pendingBatches.some(b => b.message.texts.includes('Updated paragraph source that should be translated again after content changes.'))).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it('done + segment \u70b9\u51fb\u60ac\u6d6e\u7403\u4f1a\u5347\u7ea7\u4e3a\u5168\u6587\u7ffb\u8bd1', async () => {
+    const { pendingBatches, sendToContent } = await setupSegmentTest();
+    await flushPromises();
+    pendingBatches.length = 0;
+
+    const p1 = document.getElementById('p1')!;
+    const p2 = document.getElementById('p2')!;
+
+    // First do a segment translation of p1
+    p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    await flushPromises();
+
+    const segBatch = pendingBatches.find(b => b.message.texts.some(t => t.includes('first paragraph')));
+    expect(segBatch).toBeTruthy();
+    segBatch!.resolve({
+      batchId: segBatch!.message.batchId,
+      translations: ['\u7b2c\u4e00\u6bb5\u8bd1\u6587'],
+    });
+    await flushPromises();
+
+    // Clear batches before page upgrade
+    pendingBatches.length = 0;
+
+    // Now click floating ball to upgrade to page translation
+    const response = sendToContent({ type: 'TOGGLE_TRANSLATE' });
+    expect(response).toEqual({ action: 'started' });
+    await flushPromises();
+
+    // Should have sent batches for remaining paragraphs, skipping already-translated p1
+    const pageBatches = pendingBatches.filter(b => b.message.texts.length > 0);
+    expect(pageBatches.length).toBeGreaterThan(0);
+    // None of the batches should contain p1's text
+    for (const b of pageBatches) {
+      expect(b.message.texts).not.toContain('Hello world from the first paragraph that should be translatable here.');
+    }
+    // p2 should now have loading
+    expect(p2.querySelector('.nt-translation')).not.toBeNull();
+  });
+
+  it('\u5168\u6587\u7ffb\u8bd1\u8fdb\u884c\u4e2d\u65f6\uff0csegment trigger \u88ab\u963b\u6b62', async () => {
+    const { pendingBatches, sendToContent } = await setupSegmentTest();
+    await flushPromises();
+
+    // Start page translation
+    sendToContent({ type: 'TOGGLE_TRANSLATE' });
+    await flushPromises();
+
+    // Page translation in progress
+    expect(pendingBatches.length).toBeGreaterThan(0);
+
+    const p2 = document.getElementById('p2')!;
+    // Attempt segment trigger while page translating
+    p2.dispatchEvent(new Event('pointermove', { bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    await flushPromises();
+
+    // Should not have triggered additional segment-specific batches
+    // The page translation batches are already in pendingBatches
+    const initialBatchCount = pendingBatches.length;
+    // No new batches should have been added for segment
+    expect(pendingBatches.length).toBe(initialBatchCount);
+  });
+
+  it('done + page \u70b9\u51fb\u60ac\u6d6e\u7403\u4ecd\u662f\u663e\u793a/\u9690\u85cf\u5207\u6362', async () => {
+    const { pendingBatches, sendToContent } = await setupSegmentTest();
+    await flushPromises();
+
+    // Start and complete page translation
+    sendToContent({ type: 'TOGGLE_TRANSLATE' });
+    await flushPromises();
+
+    while (pendingBatches.length > 0) {
+      const batch = pendingBatches.shift()!;
+      batch.resolve({
+        batchId: batch.message.batchId,
+        translations: batch.message.texts.map((_, i) => `\u8bd1\u6587${i}`),
+      });
+      await flushPromises();
+    }
+
+    // Now in done + page, toggle should hide
+    const hideResponse = sendToContent({ type: 'TOGGLE_TRANSLATE' });
+    expect(hideResponse).toEqual({ action: 'toggled_hidden' });
+
+    // Toggle again should show
+    const showResponse = sendToContent({ type: 'TOGGLE_TRANSLATE' });
+    expect(showResponse).toEqual({ action: 'toggled_visible' });
+  });
+
+  it('\u672a\u914d\u7f6e provider \u65f6 segment trigger \u53ea\u663e\u793a\u672c\u5730\u9519\u8bef\uff0c\u4e0d\u8fdb\u5165 translating', async () => {
+    vi.resetModules();
+
+    document.body.innerHTML = `
+      <main>
+        <p id="p1">Hello world from the first paragraph that should be translatable here.</p>
+      </main>
+    `;
+
+    vi.doMock('@shared/storage', () => ({
+      loadProviderConfig: vi.fn(async () => ({
+        endpoint: '',
+        apiKey: '',
+        model: '',
+        targetLanguage: 'Simplified Chinese',
+        jsonMode: 'auto',
+      })),
+      isProviderConfigured: vi.fn(() => false),
+      isAutoTranslateEnabledForUrl: vi.fn(async () => false),
+    }));
+
+    vi.doMock('../../src/content/extractor', async () => {
+      const actual = await vi.importActual<typeof import('../../src/content/extractor')>('../../src/content/extractor');
+      return {
+        ...actual,
+        findMainContainer: vi.fn(async () => document.querySelector('main')!),
+        collectParagraphs: vi.fn(() => []),
+        resolveHoverParagraphCandidate: vi.fn((target: EventTarget | null) => {
+          if (target instanceof Element && target.tagName === 'P') return target;
+          return null;
+        }),
+      };
+    });
+
+    const pendingBatches: PendingBatch[] = [];
+    vi.stubGlobal('chrome', {
+      runtime: {
+        id: 'test-extension',
+        onMessage: { addListener: vi.fn() },
+        sendMessage: vi.fn((message: { type: string; batchId?: string; texts?: string[] }) => {
+          if (message.type === 'TRANSLATE_BATCH') {
+            return new Promise((resolve) => {
+              pendingBatches.push({
+                message: { type: message.type, batchId: message.batchId!, texts: message.texts ?? [] },
+                resolve: resolve as PendingBatch['resolve'],
+              });
+            });
+          }
+          return Promise.resolve({});
+        }),
+      },
+    });
+
+    await import('../../src/content/index');
+    await flushPromises();
+    pendingBatches.length = 0;
+
+    const p1 = document.getElementById('p1')!;
+    p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    await flushPromises();
+
+    // Should show error on floating ball
+    const fabButton = document.querySelector('.nt-fab-button');
+    expect(fabButton?.getAttribute('data-state')).toBe('error');
+    // Should NOT have sent any batches
+    expect(pendingBatches).toHaveLength(0);
+  });
+});

@@ -293,6 +293,97 @@ function findContainerByFingerprint(root: Element, fingerprint: string): Element
   return bestMatch;
 }
 
+// --- Hover candidate resolution ---
+
+const EDITABLE_SELECTOR = 'input, textarea, select, [contenteditable], [contenteditable="true"]';
+const MAX_HOVER_CLIMB = 15;
+const QUICK_TRANSLATE_CONTAINER_TAGS = new Set(['DIV', 'ARTICLE', 'SECTION', 'MAIN', 'ASIDE', 'LABEL']);
+const QUICK_TRANSLATE_SELECTOR = Array.from(QUICK_TRANSLATE_CONTAINER_TAGS).map(t => t.toLowerCase()).join(',');
+
+function isParagraphSelectorOnlyEnabled(compat: SiteCompat): boolean {
+  return typeof compat.paragraphSelectorOnly === 'function'
+    ? compat.paragraphSelectorOnly(location.pathname)
+    : compat.paragraphSelectorOnly === true;
+}
+
+function hasInjectedUiContext(el: Element): boolean {
+  if (el.hasAttribute('data-nt')) return true;
+  if (el.className && typeof el.className === 'string' && el.className.split(' ').some(c => c.startsWith('nt-'))) return true;
+  return el.closest('[data-nt]') !== null;
+}
+
+function hasMeaningfulText(el: Element): boolean {
+  const { text } = extractTextWithCodeProtection(el);
+  const trimmed = text.trim();
+  return trimmed.length >= MIN_TEXT_LENGTH && trimmed.length <= MAX_TEXT_LENGTH;
+}
+
+function hasQuickTranslateDescendantBlock(el: Element, compat?: SiteCompat): boolean {
+  const selector = compat?.paragraphSelector
+    ? `${PARAGRAPH_SELECTOR},${QUICK_TRANSLATE_SELECTOR},${compat.paragraphSelector}`
+    : `${PARAGRAPH_SELECTOR},${QUICK_TRANSLATE_SELECTOR}`;
+
+  for (const desc of el.querySelectorAll(selector)) {
+    if (shouldSkipElement(desc, compat)) continue;
+    if (isLinkHeavy(desc)) continue;
+    if (!hasMeaningfulText(desc)) continue;
+    return true;
+  }
+
+  return false;
+}
+
+function isEligibleQuickTranslateElement(el: Element, compat?: SiteCompat): boolean {
+  const effectiveParagraphTags = compat?.extraParagraphTags
+    ? new Set([...PARAGRAPH_TAGS, ...compat.extraParagraphTags])
+    : PARAGRAPH_TAGS;
+
+  const isParagraphTag = effectiveParagraphTags.has(el.tagName);
+  const matchesSelector = compat?.paragraphSelector ? el.matches(compat.paragraphSelector) : false;
+  const isGenericContainer = QUICK_TRANSLATE_CONTAINER_TAGS.has(el.tagName);
+  if (!isParagraphTag && !matchesSelector && !isGenericContainer) return false;
+
+  if (shouldSkipElement(el, compat)) return false;
+  if (isLinkHeavy(el)) return false;
+  if (!hasMeaningfulText(el)) return false;
+
+  if (isParagraphTag && hasTranslatableDescendantParagraph(el)) return false;
+  if (!isParagraphTag && !matchesSelector && hasQuickTranslateDescendantBlock(el, compat)) return false;
+
+  return true;
+}
+
+export function extractQuickTranslateParagraph(element: Element): ExtractedParagraph | null {
+  if (!element.isConnected) return null;
+  if (element.matches(EDITABLE_SELECTOR) || element.closest(EDITABLE_SELECTOR)) return null;
+  if (hasInjectedUiContext(element)) return null;
+
+  const compat = getSiteCompat(location.hostname);
+  if (!isEligibleQuickTranslateElement(element, compat)) return null;
+
+  const { text, codeMap } = extractTextWithCodeProtection(element);
+  const trimmed = text.trim();
+  if (trimmed.length < MIN_TEXT_LENGTH || trimmed.length > MAX_TEXT_LENGTH) return null;
+
+  return { element, text: trimmed, codeMap };
+}
+
+export function resolveHoverParagraphCandidate(target: EventTarget | null): Element | null {
+  if (!target || !(target instanceof Element)) return null;
+
+  const compat = getSiteCompat(location.hostname);
+  let el: Element | null = target;
+
+  for (let depth = 0; el && depth < MAX_HOVER_CLIMB; depth++, el = el.parentElement) {
+    if (el.matches(EDITABLE_SELECTOR) || el.closest(EDITABLE_SELECTOR)) return null;
+    if (hasInjectedUiContext(el)) return null;
+
+    if (isEligibleQuickTranslateElement(el, compat)) return el;
+  }
+
+  return null;
+}
+
 // --- Paragraph collection ---
 
 const PARAGRAPH_SELECTOR = Array.from(PARAGRAPH_TAGS).map(t => t.toLowerCase()).join(',');
@@ -346,9 +437,7 @@ export function collectParagraphs(
     }
   }
 
-  const selectorOnly = typeof compat.paragraphSelectorOnly === 'function'
-    ? compat.paragraphSelectorOnly(location.pathname)
-    : compat.paragraphSelectorOnly === true;
+  const selectorOnly = isParagraphSelectorOnlyEnabled(compat);
 
   if (selectorOnly && selectorNodeCount > 0) {
     return paragraphs;

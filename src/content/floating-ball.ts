@@ -53,7 +53,7 @@ export class FloatingBall {
 
     if (state.mode === 'translating') {
       buttonText = '停';
-      hintText = '翻译中...';
+      hintText = '';
       title = '取消翻译';
       stateKey = 'translating';
       badgeMode = 'loading';
