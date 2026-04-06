@@ -189,4 +189,50 @@ describe('Injector', () => {
     expect((heading.querySelector(':scope > .nt-translation') as HTMLElement).textContent).toBe('PR 详情标题译文');
     expect(injector.hasTranslation(title)).toBe(true);
   });
+
+  it('segment scope 元数据会写入 placeholder 和译文', () => {
+    const p1 = document.getElementById('p1')!;
+    injector.setScope('segment');
+    injector.showLoadingPlaceholder(p1);
+    const placeholder = p1.querySelector('.nt-translation');
+    expect(placeholder?.getAttribute('data-nt-scope')).toBe('segment');
+
+    injector.insertTranslation(p1, '你好世界');
+    const translation = p1.querySelector('.nt-translation');
+    expect(translation?.getAttribute('data-nt-scope')).toBe('segment');
+  });
+
+  it('page scope 元数据会写入 placeholder 和译文', () => {
+    const p1 = document.getElementById('p1')!;
+    injector.setScope('page');
+    injector.showLoadingPlaceholder(p1);
+    const placeholder = p1.querySelector('.nt-translation');
+    expect(placeholder?.getAttribute('data-nt-scope')).toBe('page');
+
+    injector.insertTranslation(p1, '你好世界');
+    const translation = p1.querySelector('.nt-translation');
+    expect(translation?.getAttribute('data-nt-scope')).toBe('page');
+  });
+
+  it('scope 元数据不影响 hasTranslation 的判断', () => {
+    const p1 = document.getElementById('p1')!;
+    injector.setScope('segment');
+    injector.insertTranslation(p1, '你好世界');
+    expect(injector.hasTranslation(p1)).toBe(true);
+
+    injector.setScope('page');
+    expect(injector.hasTranslation(p1)).toBe(true);
+  });
+
+  it('clearLoadingIndicators 会移除未完成的 placeholder，但保留已完成译文', () => {
+    const p1 = document.getElementById('p1')!;
+    const p2 = document.getElementById('p2')!;
+
+    injector.showLoadingPlaceholder(p1);
+    injector.insertTranslation(p2, '早上好');
+    injector.clearLoadingIndicators();
+
+    expect(p1.querySelector('.nt-translation')).toBeNull();
+    expect((p2.querySelector('.nt-translation') as HTMLElement | null)?.textContent).toBe('早上好');
+  });
 });

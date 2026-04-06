@@ -21,6 +21,11 @@ export class Injector {
   private theme: 'light' | 'dark' = 'light';
   private targetLanguage = 'Simplified Chinese';
   private visible = true;
+  private currentScope: 'segment' | 'page' | null = null;
+
+  setScope(scope: 'segment' | 'page') {
+    this.currentScope = scope;
+  }
 
   setTargetLanguage(lang: string) {
     this.targetLanguage = lang;
@@ -59,6 +64,9 @@ export class Injector {
       translationEl.setAttribute('data-nt-id', ntId);
       translationEl.setAttribute('data-nt-theme', this.theme);
       translationEl.setAttribute('lang', LANG_MAP[this.targetLanguage] ?? 'zh-CN');
+      if (this.currentScope) {
+        translationEl.setAttribute('data-nt-scope', this.currentScope);
+      }
       this.applyVisibility(translationEl);
 
       if (shouldAppendInside(hostEl)) {
@@ -117,6 +125,9 @@ export class Injector {
     placeholderEl.setAttribute('data-nt-id', ntId);
     placeholderEl.setAttribute('data-nt-theme', this.theme);
     placeholderEl.setAttribute('lang', LANG_MAP[this.targetLanguage] ?? 'zh-CN');
+    if (this.currentScope) {
+      placeholderEl.setAttribute('data-nt-scope', this.currentScope);
+    }
     this.applyVisibility(placeholderEl);
 
     if (shouldAppendInside(hostEl)) {
@@ -130,8 +141,19 @@ export class Injector {
   clearLoadingIndicators() {
     for (const el of this.pendingDotsElements) el.remove();
     this.pendingDotsElements.clear();
+
+    const stalePlaceholders: HTMLElement[] = [];
     for (const el of this.translationElements) {
-      el.classList.remove('nt-loading', 'nt-reveal');
+      if (el.classList.contains('nt-loading')) {
+        stalePlaceholders.push(el);
+        continue;
+      }
+      el.classList.remove('nt-reveal');
+    }
+
+    for (const el of stalePlaceholders) {
+      this.translationElements.delete(el);
+      el.remove();
     }
   }
 

@@ -7,17 +7,25 @@ import { CONTENT_SCRIPT_READY_KEY } from '@shared/content-ui';
 import { isAutoTranslateEnabledForUrl, isProviderConfigured, loadProviderConfig } from '@shared/storage';
 import { getMainDomain } from '@shared/site';
 import type { ProviderConfig } from '@shared/types';
-import { collectParagraphs, findMainContainer } from './extractor';
+import {
+  collectParagraphs,
+  extractQuickTranslateParagraph,
+  extractTextWithCodeProtection,
+  findMainContainer,
+  resolveHoverParagraphCandidate,
+} from './extractor';
 import { Translator } from './translator';
 import { Injector } from './injector';
 import { ProgressBar } from './progress';
 import { FloatingBall } from './floating-ball';
+import { HoverController } from './hover-controller';
 
 (window as unknown as Record<string, unknown>)[CONTENT_SCRIPT_READY_KEY] = true;
 
 // --- State ---
 
 type TranslateState = 'idle' | 'translating' | 'done';
+type TranslateScope = 'none' | 'segment' | 'page';
 
 const VIEWPORT_TRANSLATION_MARGIN_PX = 520;
 const DOM_WORK_DEBOUNCE_MS = 180;
@@ -25,6 +33,7 @@ const SCROLL_IDLE_MS = 140;
 const SPA_AUTO_TRANSLATE_DELAY_MS = 320;
 
 let state: TranslateState = 'idle';
+let scope: TranslateScope = 'none';
 let translationsVisible = true;
 let toggleBusy = false;
 let mutationObserver: MutationObserver | null = null;
@@ -57,11 +66,21 @@ function syncFloatingBallState() {
   clearFloatingBallErrorTimer();
 
   if (state === 'translating') {
+    if (scope === 'segment') {
+      floatingBall.setState({ mode: 'idle' });
+      return;
+    }
+
     floatingBall.setState({ mode: 'translating' });
     return;
   }
 
   if (state === 'done') {
+    if (scope === 'segment') {
+      floatingBall.setState({ mode: 'idle' });
+      return;
+    }
+
     floatingBall.setState({ mode: 'translated', visible: translationsVisible });
     return;
   }
@@ -94,10 +113,39 @@ async function handleFloatingBallClick() {
   updateFloatingBallFromResponse(response);
 }
 
-function markTranslationDone() {
+function markPageTranslationDone() {
   state = 'done';
+  scope = 'page';
   progressBar.complete();
   reportTranslateStatus('done', latestProgress);
+  syncFloatingBallState();
+}
+
+function markSegmentTranslationDone() {
+  state = 'done';
+  scope = 'segment';
+  progressBar.hide();
+  syncFloatingBallState();
+}
+
+function hasRenderedTranslations(): boolean {
+  return Array.from(document.querySelectorAll('.nt-translation[data-nt-id]'))
+    .some((el) => !el.classList.contains('nt-loading') && (el.textContent ?? '').trim().length > 0);
+}
+
+function restoreIdleOrSegmentDone() {
+  pendingIncrementalTranslation = false;
+  pendingNewContent = false;
+  latestProgress = { completed: 0, total: 0 };
+
+  if (hasRenderedTranslations()) {
+    state = 'done';
+    scope = 'segment';
+  } else {
+    state = 'idle';
+    scope = 'none';
+  }
+
   syncFloatingBallState();
 }
 
@@ -137,8 +185,12 @@ const translator = new Translator({
   },
   onProgress: (completed, total) => {
     latestProgress = { completed, total };
-    progressBar.update(completed, total);
-    reportTranslateStatus('translating', latestProgress);
+
+    if (scope === 'page') {
+      progressBar.update(completed, total);
+      reportTranslateStatus('translating', latestProgress);
+    }
+
     syncFloatingBallState();
   },
   onBlocksQueued: (elements) => {
@@ -147,35 +199,62 @@ const translator = new Translator({
     }
   },
   onComplete: () => {
-    if (pendingIncrementalTranslation && mainContainer) {
-      pendingIncrementalTranslation = false;
-      void startIncrementalTranslation().then(started => {
-        if (!started) {
-          markTranslationDone();
-        }
-      });
+    if (scope === 'page') {
+      if (pendingIncrementalTranslation && mainContainer) {
+        pendingIncrementalTranslation = false;
+        void startIncrementalTranslation().then(started => {
+          if (!started) {
+            markPageTranslationDone();
+          }
+        });
+        return;
+      }
+
+      markPageTranslationDone();
       return;
     }
 
-    markTranslationDone();
+    stopObserver();
+    markSegmentTranslationDone();
   },
   onError: (error) => {
-    state = 'idle';
-    pendingIncrementalTranslation = false;
-    pendingNewContent = false;
-    injector.clearLoadingIndicators();
-    progressBar.error(error);
-    reportTranslateStatus('error', latestProgress, error);
-    stopObserver();
-    showFloatingBallError(error);
-  },
-  onCancelled: () => {
-    state = 'idle';
-    pendingIncrementalTranslation = false;
-    pendingNewContent = false;
+    if (scope === 'page') {
+      state = 'idle';
+      scope = 'none';
+      pendingIncrementalTranslation = false;
+      pendingNewContent = false;
+      injector.clearLoadingIndicators();
+      progressBar.error(error);
+      reportTranslateStatus('error', latestProgress, error);
+      stopObserver();
+      showFloatingBallError(error);
+      return;
+    }
+
+    // segment error: silent local recovery
     injector.clearLoadingIndicators();
     progressBar.hide();
-    syncFloatingBallState();
+    stopObserver();
+    showFloatingBallError(error);
+    restoreIdleOrSegmentDone();
+  },
+  onCancelled: () => {
+    if (scope === 'page') {
+      state = 'idle';
+      scope = 'none';
+      pendingIncrementalTranslation = false;
+      pendingNewContent = false;
+      injector.clearLoadingIndicators();
+      progressBar.hide();
+      syncFloatingBallState();
+      return;
+    }
+
+    // segment cancel: preserve existing translations
+    injector.clearLoadingIndicators();
+    progressBar.hide();
+    stopObserver();
+    restoreIdleOrSegmentDone();
   },
 });
 
@@ -208,6 +287,11 @@ function handleToggle(): ToggleTranslateResponse {
         return { action: 'cancelled' };
 
       case 'done':
+        if (scope === 'segment') {
+          void startTranslation();
+          return { action: 'started' };
+        }
+
         translationsVisible = !translationsVisible;
         injector.setVisibility(translationsVisible);
         syncFloatingBallState();
@@ -263,8 +347,19 @@ function getTranslationIncludeElement(): ((el: Element) => boolean) | undefined 
   return (el: Element) => isNearViewport(el, VIEWPORT_TRANSLATION_MARGIN_PX);
 }
 
+function getCurrentSourceText(el: Element): string {
+  return extractTextWithCodeProtection(el).text.trim();
+}
+
+function hasFreshRenderedTranslation(el: Element): boolean {
+  if (!injector.hasTranslation(el)) return false;
+  const text = getCurrentSourceText(el);
+  if (!text) return false;
+  return translator.hasUpToDateTranslation(el, text);
+}
+
 function shouldSkipRenderedElement(el: Element): boolean {
-  return injector.hasTranslation(el);
+  return hasFreshRenderedTranslation(el);
 }
 
 async function ensureMainContainerReady(): Promise<boolean> {
@@ -281,7 +376,7 @@ async function ensureMainContainerReady(): Promise<boolean> {
   mainContainer = nextContainer;
   injector.detectTheme(mainContainer);
 
-  if (state !== 'idle' && !mutationObserver) {
+  if (scope === 'page' && state !== 'idle' && !mutationObserver) {
     startObserver();
   }
 
@@ -312,16 +407,19 @@ async function runTranslationPass(config?: ProviderConfig) {
 async function startTranslation() {
   clearNavigationAutoTranslateTimer();
   state = 'translating';
+  scope = 'page';
   translationsVisible = true;
   pendingIncrementalTranslation = false;
   pendingNewContent = false;
   latestProgress = { completed: 0, total: 0 };
   injector.setVisibility(true);
+  injector.setScope('page');
   syncFloatingBallState();
 
   const config = await loadProviderConfig();
   if (!isProviderConfigured(config)) {
     state = 'idle';
+    scope = 'none';
     const error = '请先在扩展弹窗中完成翻译配置';
     progressBar.show();
     progressBar.error(error);
@@ -332,10 +430,65 @@ async function startTranslation() {
 
   const started = await runTranslationPass(config);
   if (!started) {
-    markTranslationDone();
+    markPageTranslationDone();
   }
 
   startObserver();
+}
+
+function isEditableElement(el: Element | null): boolean {
+  return el?.matches('input, textarea, select, [contenteditable], [contenteditable="true"]') ?? false;
+}
+
+function isEditableFocusActive(): boolean {
+  const active = document.activeElement;
+  if (!(active instanceof Element)) return false;
+  return isEditableElement(active) || active.closest('input, textarea, select, [contenteditable], [contenteditable="true"]') !== null;
+}
+
+function isTranslationInProgress(): boolean {
+  return state === 'translating';
+}
+
+async function handleSegmentTranslation(element: Element): Promise<boolean> {
+  if (isTranslationInProgress()) return false;
+  if (!element.isConnected) return false;
+  if (isEditableFocusActive()) return false;
+  if (hasFreshRenderedTranslation(element)) return false;
+
+  clearNavigationAutoTranslateTimer();
+
+  const config = await loadProviderConfig();
+  if (!isProviderConfigured(config)) {
+    showFloatingBallError('请先在扩展弹窗中完成翻译配置');
+    return false;
+  }
+
+  const paragraph = extractQuickTranslateParagraph(element);
+  if (!paragraph) {
+    return false;
+  }
+
+  if (isTranslationInProgress()) return false;
+
+  translationsVisible = true;
+  injector.setVisibility(true);
+  injector.setTargetLanguage(config.targetLanguage);
+  injector.detectTheme(element);
+  pendingIncrementalTranslation = false;
+  pendingNewContent = false;
+  latestProgress = { completed: 0, total: 0 };
+  state = 'translating';
+  scope = 'segment';
+  progressBar.hide();
+  injector.setScope('segment');
+  syncFloatingBallState();
+
+  await translator.start(element, config.targetLanguage, {
+    paragraphs: [paragraph],
+    shouldSkipElement: shouldSkipRenderedElement,
+  });
+  return true;
 }
 
 async function startIncrementalTranslation() {
@@ -353,6 +506,7 @@ function scheduleViewportQueuePreview() {
 }
 
 async function primeViewportQueuePreview() {
+  if (scope !== 'page') return;
   if (!useViewportLazyTranslation || (state !== 'translating' && state !== 'done')) return;
 
   const ready = await ensureMainContainerReady();
@@ -380,10 +534,21 @@ async function primeViewportQueuePreview() {
 
 function cancelTranslation() {
   clearNavigationAutoTranslateTimer();
-  state = 'idle';
   pendingIncrementalTranslation = false;
   pendingNewContent = false;
   latestProgress = { completed: 0, total: 0 };
+
+  if (scope === 'segment') {
+    translator.cancel();
+    injector.clearLoadingIndicators();
+    progressBar.hide();
+    stopObserver();
+    restoreIdleOrSegmentDone();
+    return;
+  }
+
+  state = 'idle';
+  scope = 'none';
   translator.cancel();
   injector.hideAll();
   stopObserver();
@@ -401,6 +566,7 @@ function scheduleDomWork(delay = DOM_WORK_DEBOUNCE_MS) {
 }
 
 async function flushDomWork() {
+  if (scope !== 'page') return;
   if (domWorkInProgress || isScrollActive) return;
 
   const ready = await ensureMainContainerReady();
@@ -452,12 +618,12 @@ function isNextTranslateElement(node: Element): boolean {
 }
 
 function handleScroll() {
-  if (mainContainer && !mainContainer.isConnected) {
+  if (scope === 'page' && mainContainer && !mainContainer.isConnected) {
     pendingNewContent = true;
     scheduleDomWork(0);
   }
 
-  if (useViewportLazyTranslation && (state === 'translating' || state === 'done')) {
+  if (scope === 'page' && useViewportLazyTranslation && (state === 'translating' || state === 'done')) {
     scheduleViewportQueuePreview();
   }
 
@@ -551,6 +717,7 @@ function handleSpaNavigation(nextUrl?: string) {
   }
 
   state = 'idle';
+  scope = 'none';
   pendingIncrementalTranslation = false;
   pendingNewContent = false;
   latestProgress = { completed: 0, total: 0 };
@@ -558,6 +725,7 @@ function handleSpaNavigation(nextUrl?: string) {
   translator.resetState();
   stopObserver();
   mainContainer = null;
+  hoverController.reset();
   syncFloatingBallState();
   scheduleAutoTranslateAfterSpaNavigation();
 }
@@ -576,5 +744,12 @@ history.replaceState = function (...args) {
   originalReplaceState.apply(this, args);
   handleSpaNavigation(typeof args[2] === 'string' || args[2] instanceof URL ? String(args[2]) : undefined);
 };
+
+const hoverController = new HoverController({
+  onTrigger: (el) => handleSegmentTranslation(el),
+  resolveCandidate: resolveHoverParagraphCandidate,
+  isTranslatable: (el) => !hasFreshRenderedTranslation(el),
+});
+hoverController.enable();
 
 console.log('[NextTranslate] Content script injected');

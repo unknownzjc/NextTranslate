@@ -79,8 +79,11 @@
   transition: opacity 0.2s ease, transform 0.2s ease !important;
 }
 
+.nt-fab-hint:empty {
+  display: none !important;
+}
+
 .nt-fab-wrap:hover .nt-fab-hint,
-.nt-fab-wrap[data-state="translating"] .nt-fab-hint,
 .nt-fab-wrap[data-state="error"] .nt-fab-hint {
   opacity: 1 !important;
   transform: translateX(0) !important;
@@ -296,4 +299,11 @@
 @keyframes nt-fade-in {
   from { opacity: 0; transform: translateY(2px); }
   to   { opacity: 1; transform: translateY(0);   }
+}
+
+/* === Hover paragraph candidate ===
+   v1 keeps the class for internal state, but does not show a visible hover outline.
+=== */
+
+.nt-hover-candidate {
 }
