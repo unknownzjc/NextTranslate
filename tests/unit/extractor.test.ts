@@ -608,6 +608,36 @@ describe('resolveHoverParagraphCandidate', () => {
     expect(resolveHoverParagraphCandidate(metadata)).toBe(metadata);
   });
 
+  it('GitHub feed/dashboard 的 h3 链接标题也能作为 hover quick translate 候选', () => {
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://github.com');
+
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div id="feed-item-8111456486">
+        <div>
+          <div>
+            <div>
+              <div>
+                <div>
+                  <h3 id="feed-title">
+                    <a href="/owner/repo/pull/123">Add enough descriptive title text for quick translation on dashboard feed</a>
+                  </h3>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(container);
+
+    const titleLink = container.querySelector('a')!;
+    const title = document.getElementById('feed-title')!;
+
+    expect(resolveHoverParagraphCandidate(titleLink)).toBe(title);
+    expect(extractQuickTranslateParagraph(title)?.text).toBe('Add enough descriptive title text for quick translation on dashboard feed');
+  });
+
   it('普通 div 文本块也可作为 quick translate 候选', () => {
     const div = document.createElement('div');
     const span = document.createElement('span');
