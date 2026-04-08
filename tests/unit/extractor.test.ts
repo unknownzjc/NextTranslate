@@ -232,6 +232,76 @@ describe('collectParagraphs', () => {
     ]);
   });
 
+  it('Hacker News 首页只收集标题，不收集 subline / comhead 元数据', () => {
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://news.ycombinator.com/');
+
+    const container = document.createElement('div');
+    container.id = 'hnmain';
+    container.innerHTML = `
+      <table><tbody>
+        <tr class="athing submission">
+          <td class="title">
+            <span class="titleline">
+              <a href="https://example.com/story">A Hacker News title long enough to be translated</a>
+              <span class="sitebit comhead">(<a href="from?site=example.com"><span class="sitestr">example.com</span></a>)</span>
+            </span>
+          </td>
+        </tr>
+        <tr>
+          <td colspan="2"></td>
+          <td class="subtext">
+            <span class="subline">793 points by kipi 16 hours ago | hide | 191 comments</span>
+          </td>
+        </tr>
+      </tbody></table>
+    `;
+    document.body.appendChild(container);
+
+    const paragraphs = collectParagraphs(container);
+    expect(paragraphs.map(p => p.text)).toEqual([
+      'A Hacker News title long enough to be translated',
+    ]);
+  });
+
+  it('Hacker News 详情页收集标题和评论正文，但跳过 comhead / subline 元数据', () => {
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://news.ycombinator.com/item?id=47677853');
+
+    const container = document.createElement('div');
+    container.id = 'hnmain';
+    container.innerHTML = `
+      <table><tbody>
+        <tr>
+          <td class="title">
+            <span class="titleline">
+              <a href="https://example.com/story">A Hacker News item title long enough to be translated</a>
+              <span class="sitebit comhead">(<a href="from?site=example.com"><span class="sitestr">example.com</span></a>)</span>
+            </span>
+          </td>
+        </tr>
+        <tr>
+          <td class="subtext">
+            <span class="subline">559 points by alice 20 hours ago | hide | past | favorite | 229 comments</span>
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <span class="comhead">alice 9 hours ago | parent | next [–]</span>
+            <div class="comment">
+              <div class="commtext c00">This is a thoughtful Hacker News comment body with enough text to translate.</div>
+            </div>
+          </td>
+        </tr>
+      </tbody></table>
+    `;
+    document.body.appendChild(container);
+
+    const paragraphs = collectParagraphs(container);
+    expect(paragraphs.map(p => p.text)).toEqual([
+      'A Hacker News item title long enough to be translated',
+      'This is a thoughtful Hacker News comment body with enough text to translate.',
+    ]);
+  });
+
   it('GitHub issue 详情页会收集标题和正文，但标题不带编号', () => {
     (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://github.com/foo/bar/issues/42');
 

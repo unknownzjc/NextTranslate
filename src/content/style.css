@@ -13,6 +13,11 @@
   overflow-anchor: none !important;
 }
 
+.nt-translation[data-nt-kind="hn-title"] {
+  margin-top: 3px !important;
+  margin-bottom: 1px !important;
+}
+
 /* Light theme */
 .nt-translation[data-nt-theme="light"] {
   --nt-border-color: #4A90D9;

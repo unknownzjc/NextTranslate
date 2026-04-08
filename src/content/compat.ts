@@ -322,22 +322,24 @@ const redditCompat: SiteCompat = {
 const hackerNewsCompat: SiteCompat = {
   containerSelector: '#hnmain',
   paragraphSelector: [
+    'span.titleline > a',
     'td.title a.titlelink',
-    'div.comment span.commtext',
+    'div.comment .commtext',
     'div.toptext',
   ].join(', '),
+  paragraphSelectorOnly: true,
   shouldSkip(el: Element): boolean {
     // Skip navigation
     if (el.closest('td.hnnavbar, .pagetop')) return true;
-    // Skip subtext (points, author, time, comments link)
-    if (el.closest('td.subtext, span.subline')) return true;
+    // Skip story/comment metadata rows and related chrome
+    if (el.closest('td.subtext, span.subline, .comhead, .sitebit, .sitestr, .score, .rank, .age, .navs, .votelinks')) return true;
     // Skip user links in comments
-    if (el.closest('span.hnuser, span.age')) return true;
+    if (el.closest('span.hnuser')) return true;
     // Skip forms
     if (el.closest('form')) return true;
     // Skip short UI text
     const text = (el.textContent ?? '').trim().toLowerCase();
-    if (['reply', 'flag', 'favorite', 'hide', 'past', 'web', 'comments', 'ask', 'show', 'jobs', 'submit', 'login'].includes(text)) return true;
+    if (['reply', 'flag', 'favorite', 'hide', 'past', 'web', 'comments', 'comment', 'ask', 'show', 'jobs', 'submit', 'login', 'parent', 'prev', 'next', 'root'].includes(text)) return true;
     if (isSpecialContent(text)) return true;
     return false;
   },
