@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Injector } from '../../src/content/injector';
 
 describe('Injector', () => {
@@ -221,6 +221,84 @@ describe('Injector', () => {
     expect(titleline.querySelector('.sitebit.comhead')).not.toBeNull();
     expect(injector.hasTranslation(title)).toBe(true);
   });
+
+  it('GitHub PR 列表标题的 retry marker 复用标题行 host，并触发重试处理器', () => {
+    document.body.innerHTML = `
+      <div class="flex-auto min-width-0 p-2" id="pr-cell">
+        <a id="pr-list-title" class="markdown-title" href="/foo/bar/pull/42">Pull request title with enough text</a>
+        <span class="IssueLabel">priority/p1</span>
+        <div class="d-flex mt-1 text-small color-fg-muted">#42 opened by alice</div>
+      </div>
+    `;
+
+    const title = document.getElementById('pr-list-title')!;
+    const cell = document.getElementById('pr-cell')!;
+    const retryHandler = vi.fn();
+    injector.setRetryHandler(retryHandler);
+
+    injector.showRetryMarker(title);
+
+    const titleLine = cell.querySelector(':scope > .nt-github-pr-title-line');
+    const retryMarker = titleLine?.querySelector(':scope > .nt-retry-marker') as HTMLButtonElement | null;
+    expect(title.querySelector('.nt-retry-marker')).toBeNull();
+    expect(retryMarker).not.toBeNull();
+    expect(retryMarker?.getAttribute('title')).toBe('重试翻译此段');
+    expect(retryMarker?.getAttribute('aria-label')).toBe('重试翻译此段');
+
+    retryMarker?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(retryHandler).toHaveBeenCalledTimes(1);
+    expect(retryHandler).toHaveBeenCalledWith(title);
+  });
+
+  it('Hacker News 标题的 retry marker 复用 title 单元格 host', () => {
+    document.body.innerHTML = `
+      <table><tbody><tr>
+        <td class="title" id="hn-title-cell">
+          <span class="titleline">
+            <a id="hn-title-link" href="https://example.com/story">A Hacker News title long enough to translate</a>
+            <span class="sitebit comhead">(<a href="from?site=example.com"><span class="sitestr">example.com</span></a>)</span>
+          </span>
+        </td>
+      </tr></tbody></table>
+    `;
+
+    const title = document.getElementById('hn-title-link')!;
+    const cell = document.getElementById('hn-title-cell')!;
+    const titleline = cell.querySelector('.titleline')!;
+
+    injector.showRetryMarker(title);
+
+    expect(title.querySelector('.nt-retry-marker')).toBeNull();
+    expect(titleline.querySelector('.nt-retry-marker')).toBeNull();
+    expect(cell.querySelector(':scope > .nt-retry-marker')).not.toBeNull();
+    expect((cell.querySelector(':scope > .nt-retry-marker') as HTMLElement).getAttribute('data-nt-kind')).toBe('hn-title');
+  });
+
+  it('showLoadingPlaceholder、insertTranslation、clearLoadingIndicators 与 removeAll 都会清理 retry marker', () => {
+    const p1 = document.getElementById('p1')!;
+
+    injector.showRetryMarker(p1);
+    expect(p1.querySelector('.nt-retry-marker')).not.toBeNull();
+
+    injector.showLoadingPlaceholder(p1);
+    expect(p1.querySelector('.nt-retry-marker')).toBeNull();
+    expect(p1.querySelector('.nt-pending-dots')).not.toBeNull();
+
+    injector.showRetryMarker(p1);
+    expect(p1.querySelector('.nt-retry-marker')).not.toBeNull();
+
+    injector.insertTranslation(p1, '你好世界');
+    expect(p1.querySelector('.nt-retry-marker')).toBeNull();
+
+    injector.showRetryMarker(p1);
+    injector.clearLoadingIndicators();
+    expect(p1.querySelector('.nt-retry-marker')).toBeNull();
+
+    injector.showRetryMarker(p1);
+    injector.removeAll();
+    expect(document.querySelector('.nt-retry-marker')).toBeNull();
+  });
+
 
   it('segment scope 元数据会写入 placeholder 和译文', () => {
     const p1 = document.getElementById('p1')!;

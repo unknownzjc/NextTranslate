@@ -26,6 +26,8 @@ interface BlockState {
   translatedChunks: Array<string | undefined>;
   remainingChunks: number;
   rendered: boolean;
+  failed: boolean;
+  failureMessage?: string;
 }
 
 // FNV-1a hash
@@ -45,24 +47,27 @@ export interface TranslatorCallbacks {
   onError: (error: string) => void;
   onCancelled: () => void;
   onBlocksQueued?: (elements: Element[]) => void;
+  onBlockFailed?: (element: Element, error: string) => void;
 }
 
 export interface TranslatorStartOptions {
   includeElement?: (el: Element) => boolean;
   shouldSkipElement?: (el: Element, text: string) => boolean;
   paragraphs?: ExtractedParagraph[];
+  retryFailed?: boolean;
 }
 
 export class Translator {
   private cache = new Map<string, string>();
   private translatedSet = new Set<Element>();
   private translatedSourceText = new WeakMap<Element, string>();
+  private failedSourceText = new WeakMap<Element, string>();
   private batchMap = new Map<string, ChunkJob[]>();
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   private cancelled = false;
   private glossary: string[] = [];
   private targetLanguage = 'Simplified Chinese';
-  private renderedBlocks = 0;
+  private completedBlocks = 0;
   private totalBlocks = 0;
   private runId = 0;
   private blockStates: BlockState[] = [];
@@ -77,7 +82,7 @@ export class Translator {
     const runId = ++this.runId;
     this.cancelled = false;
     this.targetLanguage = targetLanguage;
-    this.renderedBlocks = 0;
+    this.completedBlocks = 0;
     this.totalBlocks = 0;
     this.blockStates = [];
     this.batchMap.clear();
@@ -106,6 +111,7 @@ export class Translator {
         translatedChunks: new Array(chunks.length),
         remainingChunks: chunks.length,
         rendered: false,
+        failed: false,
       };
 
       this.blockStates.push(blockState);
@@ -129,14 +135,14 @@ export class Translator {
 
     if (this.callbacks.onBlocksQueued) {
       const pendingEls = this.blockStates
-        .filter(bs => !bs.rendered)
+        .filter(bs => !bs.rendered && !bs.failed)
         .map(bs => bs.element);
       if (pendingEls.length > 0) {
         this.callbacks.onBlocksQueued(pendingEls);
       }
     }
 
-    if (this.renderedBlocks >= this.totalBlocks) {
+    if (this.completedBlocks >= this.totalBlocks) {
       this.finishRun(runId);
       return;
     }
@@ -195,14 +201,14 @@ export class Translator {
           continue;
         }
 
+        const batchJobs = this.batchMap.get(batchId);
+        if (!batchJobs) return;
+        this.batchMap.delete(batchId);
+
         if (result.error) {
-          this.stopKeepalive();
-          this.callbacks.onError(result.error);
+          this.markBatchFailed(batchJobs, result.error, runId);
           return;
         }
-
-        const batchJobs = this.batchMap.get(batchId)!;
-        this.batchMap.delete(batchId);
 
         for (let i = 0; i < result.translations.length; i++) {
           const job = batchJobs[i];
@@ -212,7 +218,7 @@ export class Translator {
           this.cache.set(cacheKey, result.translations[i]);
 
           const blockState = this.blockStates[job.blockIndex];
-          if (!blockState || blockState.rendered || blockState.translatedChunks[job.chunkIndex] !== undefined) {
+          if (!blockState || blockState.rendered || blockState.failed || blockState.translatedChunks[job.chunkIndex] !== undefined) {
             continue;
           }
 
@@ -254,18 +260,22 @@ export class Translator {
   }
 
   private shouldSkipBlock(el: Element, text: string, options: TranslatorStartOptions): boolean {
-    if (!this.translatedSet.has(el) || this.translatedSourceText.get(el) !== text) {
-      return false;
+    if (this.translatedSet.has(el) && this.translatedSourceText.get(el) === text) {
+      return options.shouldSkipElement ? options.shouldSkipElement(el, text) : true;
     }
 
-    return options.shouldSkipElement ? options.shouldSkipElement(el, text) : true;
+    if (!options.retryFailed && this.failedSourceText.get(el) === text) {
+      return true;
+    }
+
+    return false;
   }
 
   private tryRenderBlock(blockIndex: number, runId: number) {
     if (this.cancelled || runId !== this.runId) return;
 
     const blockState = this.blockStates[blockIndex];
-    if (!blockState || blockState.rendered || blockState.remainingChunks > 0) return;
+    if (!blockState || blockState.rendered || blockState.failed || blockState.remainingChunks > 0) return;
 
     const translatedText = joinTranslatedChunks(
       blockState.translatedChunks.map(chunk => restoreCodePlaceholders(chunk ?? '', blockState.codeMap)),
@@ -273,23 +283,54 @@ export class Translator {
     );
 
     blockState.rendered = true;
+    blockState.failureMessage = undefined;
 
     if (blockState.element.isConnected) {
       this.callbacks.onBatchTranslated(blockIndex, [blockState.element], [translatedText]);
       this.translatedSet.add(blockState.element);
       this.translatedSourceText.set(blockState.element, blockState.sourceText);
+      this.failedSourceText.delete(blockState.element);
     }
 
-    this.renderedBlocks++;
-    this.callbacks.onProgress(this.renderedBlocks, this.totalBlocks);
+    this.completeBlock(runId);
+  }
 
-    if (this.renderedBlocks >= this.totalBlocks) {
+  private markBatchFailed(batchJobs: ChunkJob[], error: string, runId: number) {
+    const failedBlockIndexes = new Set(batchJobs.map(job => job.blockIndex));
+    for (const blockIndex of failedBlockIndexes) {
+      this.markBlockFailed(blockIndex, error, runId);
+    }
+  }
+
+  private markBlockFailed(blockIndex: number, error: string, runId: number) {
+    if (this.cancelled || runId !== this.runId) return;
+
+    const blockState = this.blockStates[blockIndex];
+    if (!blockState || blockState.rendered || blockState.failed) return;
+
+    blockState.failed = true;
+    blockState.failureMessage = error;
+    this.failedSourceText.set(blockState.element, blockState.sourceText);
+
+    if (blockState.element.isConnected) {
+      this.callbacks.onBlockFailed?.(blockState.element, error);
+    }
+
+    this.completeBlock(runId);
+  }
+
+  private completeBlock(runId: number) {
+    this.completedBlocks++;
+    this.callbacks.onProgress(this.completedBlocks, this.totalBlocks);
+
+    if (this.completedBlocks >= this.totalBlocks) {
       this.finishRun(runId);
     }
   }
 
   private finishRun(runId: number) {
     if (runId !== this.runId || this.cancelled) return;
+    this.batchMap.clear();
     this.stopKeepalive();
     this.callbacks.onComplete();
   }
@@ -312,6 +353,11 @@ export class Translator {
     return this.translatedSet.has(el) && this.translatedSourceText.get(el) === text;
   }
 
+  hasUpToDateFailure(el: Element, text: string): boolean {
+    return this.failedSourceText.get(el) === text;
+  }
+
+
   getTranslatedSet(): Set<Element> {
     return this.translatedSet;
   }
@@ -319,9 +365,10 @@ export class Translator {
   resetState() {
     this.translatedSet.clear();
     this.translatedSourceText = new WeakMap();
+    this.failedSourceText = new WeakMap();
     this.batchMap.clear();
     this.blockStates = [];
-    this.renderedBlocks = 0;
+    this.completedBlocks = 0;
     this.totalBlocks = 0;
     this.runId++;
     this.cancelled = false;

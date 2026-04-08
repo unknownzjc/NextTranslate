@@ -18,17 +18,22 @@ export class Injector {
   private ntIdCounter = 0;
   private translationElements = new Set<HTMLElement>();
   private pendingDotsElements = new Set<HTMLElement>();
+  private retryMarkerElements = new Set<HTMLElement>();
   private theme: 'light' | 'dark' = 'light';
   private targetLanguage = 'Simplified Chinese';
   private visible = true;
   private currentScope: 'segment' | 'page' | null = null;
-
+  private retryHandler: ((sourceEl: Element) => void) | null = null;
   setScope(scope: 'segment' | 'page') {
     this.currentScope = scope;
   }
 
   setTargetLanguage(lang: string) {
     this.targetLanguage = lang;
+  }
+
+  setRetryHandler(handler: ((sourceEl: Element) => void) | null) {
+    this.retryHandler = handler;
   }
 
   detectTheme(container: Element) {
@@ -48,14 +53,11 @@ export class Injector {
   }
 
   insertTranslation(sourceEl: Element, translatedText: string) {
-    let ntId = sourceEl.getAttribute('data-nt-id');
-    if (!ntId) {
-      ntId = String(this.ntIdCounter++);
-      sourceEl.setAttribute('data-nt-id', ntId);
-    }
-
+    const ntId = this.ensureNtId(sourceEl);
     const hostEl = getTranslationHost(sourceEl);
     let translationEl = this.findExistingTranslation(sourceEl, ntId);
+
+    this.clearRetryMarker(sourceEl);
 
     if (!translationEl) {
       translationEl = document.createElement('span');
@@ -89,36 +91,26 @@ export class Injector {
     }
 
     translationEl.textContent = translatedText;
-
-    // Remove the pending dots from the visual host element
-    const dotsEl = getDotsHost(sourceEl).querySelector(':scope > .nt-pending-dots[data-nt]');
-    if (dotsEl) {
-      this.pendingDotsElements.delete(dotsEl as HTMLElement);
-      dotsEl.remove();
-    }
-
+    this.clearPendingDots(sourceEl);
   }
 
   showLoadingPlaceholder(sourceEl: Element) {
-    // Assign ntId now so insertTranslation can find the placeholder later
-    let ntId = sourceEl.getAttribute('data-nt-id');
-    if (!ntId) {
-      ntId = String(this.ntIdCounter++);
-      sourceEl.setAttribute('data-nt-id', ntId);
-    }
-
+    const ntId = this.ensureNtId(sourceEl);
     const hostEl = getTranslationHost(sourceEl);
     const dotsHost = getDotsHost(sourceEl);
 
+    this.clearRetryMarker(sourceEl);
+
     // Don't double-insert if already a placeholder or real translation
     if (this.findExistingTranslation(sourceEl, ntId)) return;
+
+    const translationKind = getTranslationKind(sourceEl);
 
     // 1. Append animated dots at the end of the visual title/label area
     const dotsEl = document.createElement('span');
     dotsEl.className = 'nt-pending-dots';
     dotsEl.setAttribute('data-nt', '');
     dotsEl.setAttribute('data-nt-theme', this.theme);
-    const translationKind = getTranslationKind(sourceEl);
     if (translationKind) {
       dotsEl.setAttribute('data-nt-kind', translationKind);
     }
@@ -149,34 +141,74 @@ export class Injector {
     this.translationElements.add(placeholderEl);
   }
 
+  showRetryMarker(sourceEl: Element) {
+    const ntId = this.ensureNtId(sourceEl);
+    const dotsHost = getDotsHost(sourceEl);
+    const translationKind = getTranslationKind(sourceEl);
+
+    this.clearPendingDots(sourceEl);
+    this.removeLoadingPlaceholder(sourceEl, ntId);
+
+    let retryEl = this.findRetryMarker(sourceEl, ntId);
+    if (!retryEl) {
+      retryEl = document.createElement('button');
+      retryEl.type = 'button';
+      retryEl.className = 'nt-retry-marker';
+      retryEl.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.retryHandler?.(sourceEl);
+      });
+      this.retryMarkerElements.add(retryEl);
+    }
+
+    retryEl.setAttribute('data-nt', '');
+    retryEl.setAttribute('data-nt-id', ntId);
+    retryEl.setAttribute('data-nt-theme', this.theme);
+    retryEl.setAttribute('title', '重试翻译此段');
+    retryEl.setAttribute('aria-label', '重试翻译此段');
+    if (translationKind) {
+      retryEl.setAttribute('data-nt-kind', translationKind);
+    } else {
+      retryEl.removeAttribute('data-nt-kind');
+    }
+    retryEl.textContent = '↻';
+    this.applyVisibility(retryEl);
+    dotsHost.appendChild(retryEl);
+  }
+
+  clearRetryMarker(sourceEl: Element) {
+    const ntId = sourceEl.getAttribute('data-nt-id');
+    if (!ntId) return;
+
+    const retryEl = this.findRetryMarker(sourceEl, ntId);
+    if (!retryEl) return;
+
+    this.retryMarkerElements.delete(retryEl);
+    retryEl.remove();
+  }
+
   clearLoadingIndicators() {
-    for (const el of this.pendingDotsElements) el.remove();
-    this.pendingDotsElements.clear();
+    this.clearPendingLoadingIndicators();
 
-    const stalePlaceholders: HTMLElement[] = [];
-    for (const el of this.translationElements) {
-      if (el.classList.contains('nt-loading')) {
-        stalePlaceholders.push(el);
-        continue;
-      }
-      el.classList.remove('nt-reveal');
-    }
-
-    for (const el of stalePlaceholders) {
-      this.translationElements.delete(el);
-      el.remove();
-    }
+    for (const el of this.retryMarkerElements) el.remove();
+    this.retryMarkerElements.clear();
   }
 
   setVisibility(visible: boolean) {
     this.visible = visible;
     this.pruneDetachedTranslations();
+    this.pruneDetachedRetryMarkers();
 
     if (!visible) {
-      this.clearLoadingIndicators();
+      this.clearPendingLoadingIndicators();
     }
 
     for (const el of this.translationElements) {
+      this.applyVisibility(el);
+    }
+
+    for (const el of this.retryMarkerElements) {
       this.applyVisibility(el);
     }
   }
@@ -188,6 +220,7 @@ export class Injector {
   removeAll() {
     this.clearLoadingIndicators();
     this.pruneDetachedTranslations();
+    this.pruneDetachedRetryMarkers();
 
     for (const el of this.translationElements) {
       el.remove();
@@ -233,6 +266,55 @@ export class Injector {
     return null;
   }
 
+  private findRetryMarker(sourceEl: Element, ntId: string): HTMLButtonElement | null {
+    const retryEl = getDotsHost(sourceEl).querySelector(`:scope > .nt-retry-marker[data-nt-id="${CSS.escape(ntId)}"]`);
+    return retryEl instanceof HTMLButtonElement ? retryEl : null;
+  }
+
+  private ensureNtId(sourceEl: Element): string {
+    let ntId = sourceEl.getAttribute('data-nt-id');
+    if (!ntId) {
+      ntId = String(this.ntIdCounter++);
+      sourceEl.setAttribute('data-nt-id', ntId);
+    }
+    return ntId;
+  }
+
+  private clearPendingDots(sourceEl: Element) {
+    const dotsEl = getDotsHost(sourceEl).querySelector(':scope > .nt-pending-dots[data-nt]');
+    if (!dotsEl) return;
+
+    this.pendingDotsElements.delete(dotsEl as HTMLElement);
+    dotsEl.remove();
+  }
+
+  private removeLoadingPlaceholder(sourceEl: Element, ntId: string) {
+    const existingTranslation = this.findExistingTranslation(sourceEl, ntId);
+    if (!(existingTranslation instanceof HTMLElement) || !existingTranslation.classList.contains('nt-loading')) return;
+
+    this.translationElements.delete(existingTranslation);
+    existingTranslation.remove();
+  }
+
+  private clearPendingLoadingIndicators() {
+    for (const el of this.pendingDotsElements) el.remove();
+    this.pendingDotsElements.clear();
+
+    const stalePlaceholders: HTMLElement[] = [];
+    for (const el of this.translationElements) {
+      if (el.classList.contains('nt-loading')) {
+        stalePlaceholders.push(el);
+        continue;
+      }
+      el.classList.remove('nt-reveal');
+    }
+
+    for (const el of stalePlaceholders) {
+      this.translationElements.delete(el);
+      el.remove();
+    }
+  }
+
   private applyVisibility(el: HTMLElement) {
     if (this.visible) {
       el.style.removeProperty('display');
@@ -246,6 +328,14 @@ export class Injector {
     for (const el of this.translationElements) {
       if (!el.isConnected) {
         this.translationElements.delete(el);
+      }
+    }
+  }
+
+  private pruneDetachedRetryMarkers() {
+    for (const el of this.retryMarkerElements) {
+      if (!el.isConnected) {
+        this.retryMarkerElements.delete(el);
       }
     }
   }

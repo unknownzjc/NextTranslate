@@ -399,3 +399,119 @@ describe('background json mode fallback', () => {
     expect(sendResponse).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('background batch failure status isolation', () => {
+  let runtimeMessageListener!: RuntimeMessageListener;
+  let runtimeSendMessage!: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.resetModules();
+
+    vi.doMock('@shared/storage', () => ({
+      loadProviderConfig: vi.fn(async () => ({
+        endpoint: 'https://api.example.com',
+        apiKey: 'test-key',
+        model: 'test-model',
+        targetLanguage: 'Simplified Chinese',
+        jsonMode: 'auto',
+      })),
+      saveProviderConfig: vi.fn(async () => undefined),
+      isAutoTranslateEnabledForUrl: vi.fn(async () => false),
+    }));
+
+    vi.doMock('@shared/prompt', () => ({
+      buildTranslateRequest: vi.fn(() => ({ messages: [] })),
+      parseJsonModeResponse: vi.fn(() => null),
+      parseSeparatorModeResponse: vi.fn(() => null),
+    }));
+
+    vi.doMock('@shared/content-ui', () => ({
+      ensureContentUiInjected: vi.fn(async () => true),
+    }));
+
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('upstream failed');
+    }));
+
+    runtimeSendMessage = vi.fn(() => Promise.resolve());
+
+    vi.stubGlobal('chrome', {
+      runtime: {
+        onMessage: {
+          addListener: vi.fn((listener: RuntimeMessageListener) => {
+            runtimeMessageListener = listener;
+          }),
+        },
+        onStartup: { addListener: vi.fn() },
+        onInstalled: { addListener: vi.fn() },
+        sendMessage: runtimeSendMessage,
+      },
+      action: {
+        setBadgeText: vi.fn(() => Promise.resolve()),
+        setBadgeBackgroundColor: vi.fn(() => Promise.resolve()),
+      },
+      alarms: {
+        create: vi.fn(),
+        clear: vi.fn(),
+        onAlarm: { addListener: vi.fn() },
+      },
+      tabs: {
+        query: vi.fn(async () => []),
+        get: vi.fn(async (tabId: number) => ({ id: tabId, url: 'https://example.com/page' })),
+        sendMessage: vi.fn(async () => undefined),
+        onRemoved: { addListener: vi.fn() },
+        onUpdated: { addListener: vi.fn() },
+        onActivated: { addListener: vi.fn() },
+      },
+      contextMenus: {
+        create: vi.fn(),
+        onClicked: { addListener: vi.fn() },
+      },
+      commands: {
+        onCommand: { addListener: vi.fn() },
+      },
+      storage: {
+        session: {
+          get: vi.fn(async () => ({})),
+          set: vi.fn(async () => undefined),
+        },
+      },
+    });
+  });
+
+  it('单批次最终失败只回给 content，不广播 tab 级 error', async () => {
+    await import('../../src/background/index');
+
+    const sendResponse = vi.fn();
+    const sender = { tab: { id: 1 } } as chrome.runtime.MessageSender;
+    const result = runtimeMessageListener({
+      type: 'TRANSLATE_BATCH',
+      batchId: 'batch-error',
+      texts: ['Hello from failing batch'],
+      totalBatches: 1,
+    }, sender, sendResponse);
+
+    expect(result).toBe(true);
+
+    await vi.runAllTimersAsync();
+    await flushPromises(20);
+
+    expect(sendResponse).toHaveBeenCalledWith({
+      batchId: 'batch-error',
+      translations: [],
+      error: 'upstream failed',
+    });
+    expect(runtimeSendMessage).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: 'TRANSLATE_STATUS',
+      status: 'error',
+    }));
+
+    const queryResponse = vi.fn();
+    runtimeMessageListener({ type: 'QUERY_STATUS', tabId: 1 }, sender, queryResponse);
+    expect(queryResponse).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'TRANSLATE_STATUS',
+      status: 'translating',
+    }));
+  });
+});

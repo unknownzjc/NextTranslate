@@ -26,6 +26,13 @@ import { HoverController } from './hover-controller';
 
 type TranslateState = 'idle' | 'translating' | 'done';
 type TranslateScope = 'none' | 'segment' | 'page';
+type ActiveRunKind = 'none' | 'page' | 'segment' | 'retry';
+type RetryStateSnapshot = {
+  state: TranslateState;
+  scope: TranslateScope;
+  translationsVisible: boolean;
+  progress: { completed: number; total: number };
+};
 
 const VIEWPORT_TRANSLATION_MARGIN_PX = 520;
 const DOM_WORK_DEBOUNCE_MS = 180;
@@ -47,6 +54,10 @@ let pendingNewContent = false;
 let domWorkInProgress = false;
 let isScrollActive = false;
 let latestProgress = { completed: 0, total: 0 };
+let activeRunKind: ActiveRunKind = 'none';
+let activeRunHadBlockFailure = false;
+let retryStateSnapshot: RetryStateSnapshot | null = null;
+let retryTargetElement: Element | null = null;
 
 const injector = new Injector();
 const progressBar = new ProgressBar();
@@ -55,6 +66,10 @@ const floatingBall = new FloatingBall(() => {
   void handleFloatingBallClick();
 });
 let floatingBallErrorTimer: ReturnType<typeof setTimeout> | null = null;
+injector.setRetryHandler((element) => {
+  void handleFailedBlockRetry(element);
+});
+
 
 function clearFloatingBallErrorTimer() {
   if (!floatingBallErrorTimer) return;
@@ -148,6 +163,30 @@ function restoreIdleOrSegmentDone() {
 
   syncFloatingBallState();
 }
+function startRun(kind: Exclude<ActiveRunKind, 'none'>) {
+  activeRunKind = kind;
+  activeRunHadBlockFailure = false;
+}
+
+function clearActiveRun() {
+  activeRunKind = 'none';
+  activeRunHadBlockFailure = false;
+  retryTargetElement = null;
+}
+
+function restoreRetryState() {
+  const snapshot = retryStateSnapshot;
+  retryStateSnapshot = null;
+  clearActiveRun();
+  if (!snapshot) return;
+
+  state = snapshot.state;
+  scope = snapshot.scope;
+  translationsVisible = snapshot.translationsVisible;
+  latestProgress = snapshot.progress;
+  syncFloatingBallState();
+}
+
 
 function reportTranslateStatus(
   status: TranslateStatusMsg['status'],
@@ -184,9 +223,13 @@ const translator = new Translator({
     }
   },
   onProgress: (completed, total) => {
+    if (activeRunKind === 'retry') {
+      return;
+    }
+
     latestProgress = { completed, total };
 
-    if (scope === 'page') {
+    if (activeRunKind === 'page') {
       progressBar.update(completed, total);
       reportTranslateStatus('translating', latestProgress);
     }
@@ -198,8 +241,42 @@ const translator = new Translator({
       injector.showLoadingPlaceholder(el);
     }
   },
+  onBlockFailed: (element, error) => {
+    activeRunHadBlockFailure = true;
+
+    if (activeRunKind === 'page') {
+      if (element.isConnected) {
+        injector.showRetryMarker(element);
+      }
+      return;
+    }
+
+    if (activeRunKind === 'retry') {
+      const retryElement = retryTargetElement ?? element;
+      if (retryElement.isConnected) {
+        injector.showRetryMarker(retryElement);
+      }
+      restoreRetryState();
+      return;
+    }
+
+    injector.clearLoadingIndicators();
+    progressBar.hide();
+    stopObserver();
+    showFloatingBallError(error);
+  },
   onComplete: () => {
-    if (scope === 'page') {
+    const runKind = activeRunKind;
+    const hadBlockFailure = activeRunHadBlockFailure;
+
+    if (runKind === 'retry') {
+      restoreRetryState();
+      return;
+    }
+
+    clearActiveRun();
+
+    if (runKind === 'page') {
       if (pendingIncrementalTranslation && mainContainer) {
         pendingIncrementalTranslation = false;
         void startIncrementalTranslation().then(started => {
@@ -214,11 +291,31 @@ const translator = new Translator({
       return;
     }
 
-    stopObserver();
-    markSegmentTranslationDone();
+    if (runKind === 'segment') {
+      stopObserver();
+      if (hadBlockFailure) {
+        restoreIdleOrSegmentDone();
+        return;
+      }
+      markSegmentTranslationDone();
+    }
   },
   onError: (error) => {
-    if (scope === 'page') {
+    const runKind = activeRunKind;
+
+    if (runKind === 'retry') {
+      const retryElement = retryTargetElement;
+      if (retryElement?.isConnected) {
+        injector.showRetryMarker(retryElement);
+      }
+      restoreRetryState();
+      showFloatingBallError(error);
+      return;
+    }
+
+    clearActiveRun();
+
+    if (runKind === 'page') {
       state = 'idle';
       scope = 'none';
       pendingIncrementalTranslation = false;
@@ -239,7 +336,20 @@ const translator = new Translator({
     restoreIdleOrSegmentDone();
   },
   onCancelled: () => {
-    if (scope === 'page') {
+    const runKind = activeRunKind;
+
+    if (runKind === 'retry') {
+      const retryElement = retryTargetElement;
+      if (retryElement?.isConnected) {
+        injector.showRetryMarker(retryElement);
+      }
+      restoreRetryState();
+      return;
+    }
+
+    clearActiveRun();
+
+    if (runKind === 'page') {
       state = 'idle';
       scope = 'none';
       pendingIncrementalTranslation = false;
@@ -273,7 +383,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 function handleToggle(): ToggleTranslateResponse {
-  if (toggleBusy) return { action: 'busy' };
+  if (toggleBusy || activeRunKind === 'retry') return { action: 'busy' };
 
   toggleBusy = true;
   try {
@@ -358,8 +468,14 @@ function hasFreshRenderedTranslation(el: Element): boolean {
   return translator.hasUpToDateTranslation(el, text);
 }
 
+function hasFreshFailedTranslation(el: Element): boolean {
+  const text = getCurrentSourceText(el);
+  if (!text) return false;
+  return translator.hasUpToDateFailure(el, text);
+}
+
 function shouldSkipRenderedElement(el: Element): boolean {
-  return hasFreshRenderedTranslation(el);
+  return hasFreshRenderedTranslation(el) || hasFreshFailedTranslation(el);
 }
 
 async function ensureMainContainerReady(): Promise<boolean> {
@@ -400,6 +516,7 @@ async function runTranslationPass(config?: ProviderConfig) {
   latestProgress = { completed: 0, total: 0 };
   progressBar.show();
   syncFloatingBallState();
+  startRun('page');
   await translator.start(mainContainer, currentConfig.targetLanguage, options);
   return true;
 }
@@ -447,11 +564,12 @@ function isEditableFocusActive(): boolean {
 }
 
 function isTranslationInProgress(): boolean {
-  return state === 'translating';
+  return state === 'translating' || activeRunKind === 'retry';
 }
 
 async function handleSegmentTranslation(element: Element): Promise<boolean> {
   if (isTranslationInProgress()) return false;
+  if (scope === 'page') return false;
   if (!element.isConnected) return false;
   if (isEditableFocusActive()) return false;
   if (hasFreshRenderedTranslation(element)) return false;
@@ -483,10 +601,54 @@ async function handleSegmentTranslation(element: Element): Promise<boolean> {
   progressBar.hide();
   injector.setScope('segment');
   syncFloatingBallState();
+  startRun('segment');
 
   await translator.start(element, config.targetLanguage, {
     paragraphs: [paragraph],
     shouldSkipElement: shouldSkipRenderedElement,
+  });
+  return true;
+}
+
+async function handleFailedBlockRetry(element: Element): Promise<boolean> {
+  if (isTranslationInProgress()) return false;
+  if (state !== 'done' || scope !== 'page') return false;
+  if (!element.isConnected) {
+    injector.clearRetryMarker(element);
+    return false;
+  }
+
+  clearNavigationAutoTranslateTimer();
+
+  const config = await loadProviderConfig();
+  if (!isProviderConfigured(config)) {
+    showFloatingBallError('请先在扩展弹窗中完成翻译配置');
+    return false;
+  }
+
+  const { text, codeMap } = extractTextWithCodeProtection(element);
+  const sourceText = text.trim();
+  if (!sourceText) {
+    injector.clearRetryMarker(element);
+    return false;
+  }
+
+  retryStateSnapshot = {
+    state,
+    scope,
+    translationsVisible,
+    progress: latestProgress,
+  };
+  retryTargetElement = element;
+  injector.setTargetLanguage(config.targetLanguage);
+  injector.detectTheme(element);
+  injector.setScope('page');
+  startRun('retry');
+
+  await translator.start(element, config.targetLanguage, {
+    paragraphs: [{ element, text: sourceText, codeMap }],
+    shouldSkipElement: shouldSkipRenderedElement,
+    retryFailed: true,
   });
   return true;
 }
@@ -507,6 +669,7 @@ function scheduleViewportQueuePreview() {
 
 async function primeViewportQueuePreview() {
   if (scope !== 'page') return;
+  if (activeRunKind === 'retry') return;
   if (!useViewportLazyTranslation || (state !== 'translating' && state !== 'done')) return;
 
   const ready = await ensureMainContainerReady();
@@ -567,7 +730,7 @@ function scheduleDomWork(delay = DOM_WORK_DEBOUNCE_MS) {
 
 async function flushDomWork() {
   if (scope !== 'page') return;
-  if (domWorkInProgress || isScrollActive) return;
+  if (domWorkInProgress || isScrollActive || activeRunKind === 'retry') return;
 
   const ready = await ensureMainContainerReady();
   if (!ready || !mainContainer) return;
@@ -716,6 +879,8 @@ function handleSpaNavigation(nextUrl?: string) {
     cancelTranslation();
   }
 
+  retryStateSnapshot = null;
+  clearActiveRun();
   state = 'idle';
   scope = 'none';
   pendingIncrementalTranslation = false;
