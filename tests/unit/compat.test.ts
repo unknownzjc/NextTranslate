@@ -84,6 +84,9 @@ describe('getSiteCompat', () => {
   it('returns HN compat', () => {
     const compat = getSiteCompat('news.ycombinator.com');
     expect(compat.containerSelector).toBe('#hnmain');
+    expect(compat.paragraphSelector).toContain('span.titleline > a');
+    expect(compat.paragraphSelector).toContain('div.comment .commtext');
+    expect(compat.paragraphSelectorOnly).toBe(true);
   });
 
   it('returns empty compat for unknown sites', () => {
@@ -392,6 +395,24 @@ describe('HackerNews shouldSkip', () => {
   it('skips UI text like reply/flag', () => {
     const el = document.createElement('span');
     el.textContent = 'reply';
+    document.body.appendChild(el);
+    expect(compat.shouldSkip!(el)).toBe(true);
+    el.remove();
+  });
+
+  it('skips comhead metadata', () => {
+    const el = document.createElement('span');
+    el.className = 'comhead';
+    el.textContent = 'gertlabs 9 hours ago | next [–]';
+    document.body.appendChild(el);
+    expect(compat.shouldSkip!(el)).toBe(true);
+    el.remove();
+  });
+
+  it('skips sitebit/comhead source text', () => {
+    const el = document.createElement('span');
+    el.className = 'sitebit comhead';
+    el.textContent = '(z.ai)';
     document.body.appendChild(el);
     expect(compat.shouldSkip!(el)).toBe(true);
     el.remove();

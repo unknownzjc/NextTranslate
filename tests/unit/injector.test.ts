@@ -190,6 +190,38 @@ describe('Injector', () => {
     expect(injector.hasTranslation(title)).toBe(true);
   });
 
+  it('Hacker News 标题链接会把译文挂到整行 title 单元格下方，而不是插到 sitebit 前面', () => {
+    document.body.innerHTML = `
+      <table><tbody><tr>
+        <td class="title" id="hn-title-cell">
+          <span class="titleline">
+            <a id="hn-title-link" href="https://example.com/story">A Hacker News title long enough to translate</a>
+            <span class="sitebit comhead">(<a href="from?site=example.com"><span class="sitestr">example.com</span></a>)</span>
+          </span>
+        </td>
+      </tr></tbody></table>
+    `;
+
+    const title = document.getElementById('hn-title-link')!;
+    const cell = document.getElementById('hn-title-cell')!;
+    const titleline = cell.querySelector('.titleline')!;
+
+    injector.showLoadingPlaceholder(title);
+    expect(title.querySelector('.nt-pending-dots')).toBeNull();
+    expect(title.querySelector('.nt-translation')).toBeNull();
+    expect(titleline.querySelector('.nt-translation')).toBeNull();
+    expect(cell.querySelector(':scope > .nt-pending-dots')).not.toBeNull();
+    expect((cell.querySelector(':scope > .nt-pending-dots') as HTMLElement).getAttribute('data-nt-kind')).toBe('hn-title');
+    expect(cell.querySelector(':scope > .nt-translation')).not.toBeNull();
+    expect((cell.querySelector(':scope > .nt-translation') as HTMLElement).getAttribute('data-nt-kind')).toBe('hn-title');
+
+    injector.insertTranslation(title, '一条足够长的 Hacker News 标题译文');
+    expect((cell.querySelector(':scope > .nt-translation') as HTMLElement).textContent).toBe('一条足够长的 Hacker News 标题译文');
+    expect((cell.querySelector(':scope > .nt-translation') as HTMLElement).getAttribute('data-nt-kind')).toBe('hn-title');
+    expect(titleline.querySelector('.sitebit.comhead')).not.toBeNull();
+    expect(injector.hasTranslation(title)).toBe(true);
+  });
+
   it('segment scope 元数据会写入 placeholder 和译文', () => {
     const p1 = document.getElementById('p1')!;
     injector.setScope('segment');

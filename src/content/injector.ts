@@ -64,6 +64,10 @@ export class Injector {
       translationEl.setAttribute('data-nt-id', ntId);
       translationEl.setAttribute('data-nt-theme', this.theme);
       translationEl.setAttribute('lang', LANG_MAP[this.targetLanguage] ?? 'zh-CN');
+      const translationKind = getTranslationKind(sourceEl);
+      if (translationKind) {
+        translationEl.setAttribute('data-nt-kind', translationKind);
+      }
       if (this.currentScope) {
         translationEl.setAttribute('data-nt-scope', this.currentScope);
       }
@@ -114,6 +118,10 @@ export class Injector {
     dotsEl.className = 'nt-pending-dots';
     dotsEl.setAttribute('data-nt', '');
     dotsEl.setAttribute('data-nt-theme', this.theme);
+    const translationKind = getTranslationKind(sourceEl);
+    if (translationKind) {
+      dotsEl.setAttribute('data-nt-kind', translationKind);
+    }
     dotsEl.textContent = '···';
     dotsHost.appendChild(dotsEl);
     this.pendingDotsElements.add(dotsEl);
@@ -125,6 +133,9 @@ export class Injector {
     placeholderEl.setAttribute('data-nt-id', ntId);
     placeholderEl.setAttribute('data-nt-theme', this.theme);
     placeholderEl.setAttribute('lang', LANG_MAP[this.targetLanguage] ?? 'zh-CN');
+    if (translationKind) {
+      placeholderEl.setAttribute('data-nt-kind', translationKind);
+    }
     if (this.currentScope) {
       placeholderEl.setAttribute('data-nt-scope', this.currentScope);
     }
@@ -244,6 +255,14 @@ function shouldAppendInside(sourceEl: Element): boolean {
   return APPEND_INSIDE_TAGS.has(sourceEl.tagName) || sourceEl.tagName.includes('-');
 }
 
+function getTranslationKind(sourceEl: Element): string | null {
+  if (sourceEl.matches('span.titleline > a, td.title a.titlelink')) {
+    return 'hn-title';
+  }
+
+  return null;
+}
+
 function getTranslationHost(sourceEl: Element): Element {
   if (sourceEl.matches('[data-listview-item-title-container] > h3')) {
     return sourceEl.parentElement ?? sourceEl;
@@ -255,6 +274,10 @@ function getTranslationHost(sourceEl: Element): Element {
 
   if (sourceEl.matches('a.markdown-title[href*="/pull/"]')) {
     return ensureGitHubPullListTitleHost(sourceEl);
+  }
+
+  if (sourceEl.matches('span.titleline > a, td.title a.titlelink')) {
+    return sourceEl.closest('td.title') ?? sourceEl.parentElement ?? sourceEl;
   }
 
   return sourceEl;
@@ -275,6 +298,10 @@ function getExistingTranslationHost(sourceEl: Element): Element {
 
   if (sourceEl.matches('a.markdown-title[href*="/pull/"]')) {
     return sourceEl.closest('.nt-github-pr-title-line') ?? sourceEl.parentElement ?? sourceEl;
+  }
+
+  if (sourceEl.matches('span.titleline > a, td.title a.titlelink')) {
+    return sourceEl.closest('td.title') ?? sourceEl.parentElement ?? sourceEl;
   }
 
   return sourceEl;
