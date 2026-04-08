@@ -490,6 +490,64 @@ describe('content segment translation (hover quick translate)', () => {
     return { pendingBatches, sendToContent };
   }
 
+  async function setupFailedPageTranslation() {
+    const context = await setupSegmentTest();
+    await flushPromises();
+
+    const { pendingBatches, sendToContent } = context;
+    const p1 = document.getElementById('p1')!;
+    const p2 = document.getElementById('p2')!;
+    const p3 = document.getElementById('p3')!;
+    const failedText = 'F'.repeat(7000);
+    const successText = 'S'.repeat(7000);
+    const thirdText = 'T'.repeat(7000);
+
+    p1.textContent = failedText;
+    p2.textContent = successText;
+    p3.textContent = thirdText;
+    pendingBatches.length = 0;
+
+    expect(sendToContent({ type: 'TOGGLE_TRANSLATE' })).toEqual({ action: 'started' });
+    await flushPromises();
+
+    const batchesByText = new Map(
+      pendingBatches.map(batch => [batch.message.texts[0], batch]),
+    );
+
+    const failedBatch = batchesByText.get(failedText);
+    const successBatch = batchesByText.get(successText);
+    const thirdBatch = batchesByText.get(thirdText);
+    expect(failedBatch).toBeTruthy();
+    expect(successBatch).toBeTruthy();
+    expect(thirdBatch).toBeTruthy();
+
+    failedBatch!.resolve({
+      batchId: failedBatch!.message.batchId,
+      translations: [],
+      error: '第一段失败',
+    });
+    successBatch!.resolve({
+      batchId: successBatch!.message.batchId,
+      translations: ['第二段译文'],
+    });
+    thirdBatch!.resolve({
+      batchId: thirdBatch!.message.batchId,
+      translations: ['第三段译文'],
+    });
+    await flushPromises();
+    pendingBatches.length = 0;
+
+    return {
+      ...context,
+      p1,
+      p2,
+      p3,
+      failedText,
+      successText,
+      thirdText,
+    };
+  }
+
   it('hover 触发 segment translation 成功：仅当前段落出现 loading 与译文', async () => {
     const { pendingBatches } = await setupSegmentTest();
     await flushPromises();
@@ -761,6 +819,67 @@ describe('content segment translation (hover quick translate)', () => {
     const showResponse = sendToContent({ type: 'TOGGLE_TRANSLATE' });
     expect(showResponse).toEqual({ action: 'toggled_visible' });
   });
+
+  it('page 中单段失败会显示 retry marker，其它段继续完成并保持 done + page 语义', async () => {
+    const { p1, p2, sendToContent } = await setupFailedPageTranslation();
+
+    expect(p1.querySelector('.nt-retry-marker')).not.toBeNull();
+    expect(p1.querySelector('.nt-translation')).toBeNull();
+    expect(p2.querySelector('.nt-translation')?.textContent).toBe('第二段译文');
+
+    const fabButton = document.querySelector('.nt-fab-button');
+    expect(fabButton?.getAttribute('data-state')).toBe('translated-visible');
+    expect(sendToContent({ type: 'TOGGLE_TRANSLATE' })).toEqual({ action: 'toggled_hidden' });
+    expect((p1.querySelector('.nt-retry-marker') as HTMLElement | null)?.style.display).toBe('none');
+    expect(sendToContent({ type: 'TOGGLE_TRANSLATE' })).toEqual({ action: 'toggled_visible' });
+    expect(p1.querySelector('.nt-retry-marker')).not.toBeNull();
+  });
+
+  it('page failed retry icon 点击后只重试该段，并保持 page done 语义', async () => {
+    const { pendingBatches, sendToContent, p1, failedText } = await setupFailedPageTranslation();
+
+    const retryButton = p1.querySelector('.nt-retry-marker') as HTMLButtonElement | null;
+    expect(retryButton).not.toBeNull();
+
+    retryButton?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    await flushPromises();
+
+    expect(pendingBatches).toHaveLength(1);
+    expect(pendingBatches[0].message.texts).toEqual([failedText]);
+
+    pendingBatches[0].resolve({
+      batchId: pendingBatches[0].message.batchId,
+      translations: ['重试成功译文'],
+    });
+    await flushPromises();
+
+    expect(p1.querySelector('.nt-retry-marker')).toBeNull();
+    expect(p1.querySelector('.nt-translation')?.textContent).toBe('重试成功译文');
+
+    const fabButton = document.querySelector('.nt-fab-button');
+    expect(fabButton?.getAttribute('data-state')).toBe('translated-visible');
+    expect(sendToContent({ type: 'TOGGLE_TRANSLATE' })).toEqual({ action: 'toggled_hidden' });
+    expect(sendToContent({ type: 'TOGGLE_TRANSLATE' })).toEqual({ action: 'toggled_visible' });
+  });
+
+  it('failed paragraph 原文变化后会重新进入自动翻译候选', async () => {
+    vi.useFakeTimers();
+    const { pendingBatches, p1 } = await setupFailedPageTranslation();
+
+    const updatedText = 'Updated paragraph source that should re-enter auto translation after a failed run.';
+    const sourceTextNode = p1.firstChild;
+    expect(sourceTextNode?.nodeType).toBe(Node.TEXT_NODE);
+    sourceTextNode!.textContent = updatedText;
+
+    await vi.advanceTimersByTimeAsync(200);
+    await flushPromises();
+
+    expect(pendingBatches.some(batch => batch.message.texts.includes(updatedText))).toBe(true);
+    expect(p1.querySelector('.nt-retry-marker')).toBeNull();
+    expect(p1.querySelector('.nt-translation.nt-loading')).not.toBeNull();
+    vi.useRealTimers();
+  });
+
 
   it('\u672a\u914d\u7f6e provider \u65f6 segment trigger \u53ea\u663e\u793a\u672c\u5730\u9519\u8bef\uff0c\u4e0d\u8fdb\u5165 translating', async () => {
     vi.resetModules();

@@ -218,9 +218,6 @@ async function processItem(item: QueueItem) {
       return;
     }
 
-    state.status = 'error';
-    state.error = errorMsg;
-    publishTabStatus(tabId, state);
     sendResponse({ batchId: message.batchId, translations: [], error: errorMsg });
   } finally {
     state.pendingRequests.delete(message.batchId);
