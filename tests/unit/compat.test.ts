@@ -487,4 +487,24 @@ describe('Twitter paragraphSelector', () => {
 
     container.remove();
   });
+  it('matches X article title and longform body blocks', () => {
+    const compat = getSiteCompat('x.com');
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div data-testid="twitter-article-title">The File System Is the New Database: How I Built a Personal OS for AI Agents</div>
+      <div data-testid="twitterArticleRichTextView">
+        <div class="longform-unstyled">Every AI conversation starts the same way. You explain who you are and what you're working on.</div>
+        <div class="public-DraftStyleDefault-block public-DraftStyleDefault-ltr">Every AI conversation starts the same way. You explain who you are and what you're working on.</div>
+      </div>
+    `;
+    document.body.appendChild(container);
+
+    const matched = Array.from(container.querySelectorAll(compat.paragraphSelector!));
+    expect(matched).toHaveLength(2);
+    expect(matched[0]?.getAttribute('data-testid')).toBe('twitter-article-title');
+    expect(matched[1]?.className).toContain('longform-unstyled');
+
+    container.remove();
+  });
+
 });

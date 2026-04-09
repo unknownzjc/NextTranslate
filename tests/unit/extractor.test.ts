@@ -601,6 +601,32 @@ describe('collectParagraphs on x.com', () => {
       'We shipped a new login flow fix for everyone today.',
     ]);
   });
+  it('收集 X Article 标题与正文段落，不重复收集 DraftJS 镜像块', () => {
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://x.com/nexttranslate/status/4');
+
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div data-testid="twitter-article-title">The File System Is the New Database: How I Built a Personal OS for AI Agents</div>
+      <div data-testid="twitterArticleRichTextView">
+        <div class="longform-unstyled">Every AI conversation starts the same way. You explain who you are, what you're working on, and what the assistant should remember.</div>
+        <div class="public-DraftStyleDefault-block public-DraftStyleDefault-ltr">Every AI conversation starts the same way. You explain who you are, what you're working on, and what the assistant should remember.</div>
+        <h2 class="longform-header-two">1) THE CORE PROBLEM: CONTEXT, NOT PROMPTS</h2>
+        <div class="public-DraftStyleDefault-block public-DraftStyleDefault-ltr">1) THE CORE PROBLEM: CONTEXT, NOT PROMPTS</div>
+        <div class="longform-unstyled">Instead of repeating the same brief in every session, the article moves stable context into a file-based system.</div>
+        <div class="public-DraftStyleDefault-block public-DraftStyleDefault-ltr">Instead of repeating the same brief in every session, the article moves stable context into a file-based system.</div>
+      </div>
+    `;
+    document.body.appendChild(container);
+
+    const paragraphs = collectParagraphs(container);
+    expect(paragraphs.map(p => p.text)).toEqual([
+      'The File System Is the New Database: How I Built a Personal OS for AI Agents',
+      "Every AI conversation starts the same way. You explain who you are, what you're working on, and what the assistant should remember.",
+      '1) THE CORE PROBLEM: CONTEXT, NOT PROMPTS',
+      'Instead of repeating the same brief in every session, the article moves stable context into a file-based system.',
+    ]);
+  });
+
 });
 
 describe('extractQuickTranslateParagraph', () => {
