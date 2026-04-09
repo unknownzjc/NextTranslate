@@ -54,6 +54,18 @@
 
 /* === Floating action ball (right-center) === */
 
+/* Floating UI lives inside arbitrary host pages, so critical layout and transition properties
+   must explicitly override page-level span/button/view-transition styles. */
+.nt-fab-wrap,
+.nt-fab-hint,
+.nt-fab-button,
+.nt-fab-label,
+.nt-fab-badge {
+  box-sizing: border-box !important;
+  view-transition-name: none !important;
+}
+
+
 .nt-fab-wrap {
   position: fixed !important;
   top: 50% !important;
@@ -64,6 +76,8 @@
   align-items: center !important;
   gap: 10px !important;
   pointer-events: none !important;
+  contain: paint !important;
+  isolation: isolate !important;
 }
 
 .nt-fab-hint {
@@ -79,6 +93,8 @@
   overflow: hidden !important;
   text-overflow: ellipsis !important;
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.18) !important;
+  filter: none !important;
+  backdrop-filter: none !important;
   opacity: 0 !important;
   transform: translateX(8px) !important;
   transition: opacity 0.2s ease, transform 0.2s ease !important;
@@ -112,6 +128,8 @@
   color: #fff !important;
   cursor: pointer !important;
   box-shadow: 0 8px 20px rgba(74, 144, 217, 0.18) !important;
+  filter: none !important;
+  backdrop-filter: none !important;
   transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease !important;
 }
 
@@ -158,6 +176,8 @@
   position: absolute !important;
   right: -2px !important;
   bottom: -2px !important;
+  top: auto !important;
+  left: auto !important;
   min-width: 20px !important;
   height: 18px !important;
   padding: 0 5px !important;
@@ -170,6 +190,10 @@
   line-height: 18px !important;
   text-align: center !important;
   box-shadow: 0 3px 8px rgba(0, 0, 0, 0.1) !important;
+  filter: none !important;
+  backdrop-filter: none !important;
+  transform: none !important;
+  translate: none !important;
   display: none !important;
 }
 
