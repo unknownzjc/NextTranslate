@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
+  analyzeMixedLanguageText,
   isChineseDominant,
   shouldSkipElement,
+  shouldSkipXMixedChineseText,
   extractTextWithCodeProtection,
   restoreCodePlaceholders,
   estimateTokens,
@@ -11,6 +13,7 @@ import {
   findMainContainer,
   resolveHoverParagraphCandidate,
 } from '../../src/content/extractor';
+import { getSiteCompat } from '../../src/content/compat';
 
 describe('isChineseDominant', () => {
   it('纯中文返回 true', () => {
@@ -31,6 +34,26 @@ describe('isChineseDominant', () => {
 
   it('空字符串返回 false', () => {
     expect(isChineseDominant('')).toBe(false);
+  });
+});
+
+describe('shouldSkipXMixedChineseText', () => {
+  it('忽略 URL、mention、hashtag 后仍识别为中文主导', () => {
+    const analysis = analyzeMixedLanguageText('这是中文内容 @nexttranslate https://x.com/demo #AI');
+    expect(analysis.normalizedText).toBe('这是中文内容');
+    expect(shouldSkipXMixedChineseText('这是中文内容 @nexttranslate https://x.com/demo #AI')).toBe(true);
+  });
+
+  it('中文主导且只有少量英文术语时返回 true', () => {
+    expect(shouldSkipXMixedChineseText('今天修复了 login bug，终于稳定了')).toBe(true);
+  });
+
+  it('英文主导内容返回 false', () => {
+    expect(shouldSkipXMixedChineseText('We shipped a new login flow fix 今天')).toBe(false);
+  });
+
+  it('中英接近各半时保守返回 false', () => {
+    expect(shouldSkipXMixedChineseText('中文说明 English context mixed together')).toBe(false);
   });
 });
 
@@ -113,6 +136,29 @@ describe('shouldSkipElement', () => {
     const el = document.createElement('p');
     document.body.appendChild(el);
     el.textContent = 'Hi';
+    expect(shouldSkipElement(el)).toBe(true);
+  });
+  it('在 x.com 上跳过中文主导且夹杂少量英文术语的文本', () => {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    el.textContent = '今天修复了 login bug，终于稳定了';
+
+    expect(shouldSkipElement(el, getSiteCompat('x.com'))).toBe(true);
+  });
+
+  it('在 x.com 上对低置信度中英混合文本保持保守，不直接跳过', () => {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    el.textContent = '这是中文说明呀 the and';
+
+    expect(shouldSkipElement(el, getSiteCompat('x.com'))).toBe(false);
+  });
+
+  it('同一段文本在非 X 站点仍沿用通用中文占比规则', () => {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    el.textContent = '这是中文说明呀 the and';
+
     expect(shouldSkipElement(el)).toBe(true);
   });
 });
@@ -532,6 +578,56 @@ describe('collectParagraphs', () => {
       'This README paragraph should still be translated for the repository home page.',
       'This sidebar about description should still be translated for repository readers.',
     ]);
+  });
+});
+
+describe('collectParagraphs on x.com', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('中文主导 mixed tweet 会在页面翻译阶段被跳过', () => {
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://x.com/nexttranslate/status/1');
+
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div data-testid="tweetText">今天修复了 login bug，终于稳定了</div>
+      <div data-testid="tweetText">We shipped a new login flow fix for everyone today.</div>
+    `;
+    document.body.appendChild(container);
+
+    const paragraphs = collectParagraphs(container);
+    expect(paragraphs.map(p => p.text)).toEqual([
+      'We shipped a new login flow fix for everyone today.',
+    ]);
+  });
+});
+
+describe('extractQuickTranslateParagraph', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('x.com 上的中文主导 mixed tweet 不会进入 quick translate', () => {
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://x.com/nexttranslate/status/2');
+
+    const tweet = document.createElement('div');
+    tweet.setAttribute('data-testid', 'tweetText');
+    tweet.textContent = '今天修复了 login bug，终于稳定了';
+    document.body.appendChild(tweet);
+
+    expect(extractQuickTranslateParagraph(tweet)).toBeNull();
+  });
+
+  it('x.com 上的英文主导 tweet 仍可进入 quick translate', () => {
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } }).happyDOM.setURL('https://x.com/nexttranslate/status/3');
+
+    const tweet = document.createElement('div');
+    tweet.setAttribute('data-testid', 'tweetText');
+    tweet.textContent = 'We shipped a new login flow fix for everyone today.';
+    document.body.appendChild(tweet);
+
+    expect(extractQuickTranslateParagraph(tweet)?.text).toBe('We shipped a new login flow fix for everyone today.');
   });
 });
 

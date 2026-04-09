@@ -46,6 +46,7 @@ describe('getSiteCompat', () => {
     expect(compat2.containerSelector).toBe('[data-testid="primaryColumn"]');
     expect(compat1.paragraphSelector).toContain('tweetText');
     expect(compat1.paragraphSelector).toContain('UserDescription');
+    expect(compat1.shouldSkipText).toBeDefined();
   });
 
   it('returns GitHub compat', () => {
@@ -166,7 +167,16 @@ describe('Twitter shouldSkip', () => {
     expect(compat.shouldSkip!(el)).toBe(false);
     el.remove();
   });
+
+  it('通过 shouldSkipText 跳过中文主导且只有少量英文术语的 tweet', () => {
+    expect(compat.shouldSkipText?.('今天修复了 login bug，终于稳定了')).toBe(true);
+  });
+
+  it('通过 shouldSkipText 对低置信度中英混合文本保持保守', () => {
+    expect(compat.shouldSkipText?.('中文说明 English context mixed together')).toBe(false);
+  });
 });
+
 
 describe('GitHub shouldSkip', () => {
   const compat = getSiteCompat('github.com');

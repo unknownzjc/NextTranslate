@@ -1,6 +1,6 @@
 import Defuddle from 'defuddle';
 import { getSiteCompat, type SiteCompat, type SiteSkipContext } from './compat';
-
+export { analyzeMixedLanguageText, normalizeTextForLanguageAnalysis, shouldSkipXMixedChineseText } from './text-skip';
 // --- Constants ---
 
 const PARAGRAPH_TAGS = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'TD', 'TH', 'FIGCAPTION', 'DT', 'DD']);
@@ -22,6 +22,12 @@ export function isChineseDominant(text: string): boolean {
   return cjkCount / stripped.length > 0.5;
 }
 
+function shouldSkipText(text: string, compat?: SiteCompat, context: SiteSkipContext = 'page'): boolean {
+  if (!text) return false;
+  if (compat?.shouldSkipText) return compat.shouldSkipText(text, context);
+  return isChineseDominant(text);
+}
+
 // --- Element filtering ---
 
 export function shouldSkipElement(el: Element, compat?: SiteCompat, context: SiteSkipContext = 'page'): boolean {
@@ -38,7 +44,7 @@ export function shouldSkipElement(el: Element, compat?: SiteCompat, context: Sit
 
   const text = (el.textContent ?? '').replace(/\s/g, '');
   if (text.length < MIN_TEXT_LENGTH) return true;
-  if (isChineseDominant(el.textContent ?? '')) return true;
+  if (shouldSkipText(el.textContent ?? '', compat, context)) return true;
 
   return false;
 }
@@ -364,6 +370,7 @@ export function extractQuickTranslateParagraph(element: Element): ExtractedParag
   const { text, codeMap } = extractTextWithCodeProtection(element);
   const trimmed = text.trim();
   if (trimmed.length < MIN_TEXT_LENGTH || trimmed.length > MAX_TEXT_LENGTH) return null;
+  if (shouldSkipText(trimmed, compat, 'quick')) return null;
 
   return { element, text: trimmed, codeMap };
 }
@@ -417,6 +424,7 @@ export function collectParagraphs(
     const { text, codeMap } = extractTextWithCodeProtection(el);
     const trimmed = text.trim();
     if (trimmed.length < MIN_TEXT_LENGTH || trimmed.length > MAX_TEXT_LENGTH) return false;
+    if (shouldSkipText(trimmed, compat)) return false;
     if (shouldSkipTranslated(el, trimmed)) return false;
 
     visited.add(el);
