@@ -76,13 +76,13 @@
   align-items: center !important;
   gap: 10px !important;
   pointer-events: none !important;
-  contain: paint !important;
   isolation: isolate !important;
 }
 
 .nt-fab-hint {
   max-width: min(42vw, 220px) !important;
   padding: 8px 12px !important;
+  border: 1px solid rgba(148, 163, 184, 0.18) !important;
   border-radius: 999px !important;
   background: rgba(17, 24, 39, 0.88) !important;
   color: #fff !important;
@@ -92,13 +92,20 @@
   white-space: nowrap !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.18) !important;
+  box-shadow: none !important;
   filter: none !important;
   backdrop-filter: none !important;
   opacity: 0 !important;
   transform: translateX(8px) !important;
   transition: opacity 0.2s ease, transform 0.2s ease !important;
 }
+
+.nt-fab-hint::before,
+.nt-fab-hint::after {
+  content: none !important;
+  display: none !important;
+}
+
 
 .nt-fab-hint:empty {
   display: none !important;
@@ -127,10 +134,10 @@
   background: linear-gradient(135deg, #4A90D9, #5B6EF5) !important;
   color: #fff !important;
   cursor: pointer !important;
-  box-shadow: 0 8px 20px rgba(74, 144, 217, 0.18) !important;
+  box-shadow: none !important;
   filter: none !important;
   backdrop-filter: none !important;
-  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease !important;
+  transition: transform 0.18s ease, background 0.18s ease !important;
 }
 
 .nt-fab-button::before,
@@ -141,7 +148,7 @@
 
 .nt-fab-button:hover {
   transform: translateY(-1px) scale(1.02) !important;
-  box-shadow: 0 10px 24px rgba(74, 144, 217, 0.22) !important;
+  box-shadow: none !important;
 }
 
 .nt-fab-button:active {
@@ -150,18 +157,18 @@
 
 .nt-fab-button[data-state="translating"] {
   background: linear-gradient(135deg, #FF8A3D, #FF5F6D) !important;
-  box-shadow: 0 8px 20px rgba(255, 95, 109, 0.2) !important;
+  box-shadow: none !important;
 }
 
 .nt-fab-button[data-state="translated-visible"],
 .nt-fab-button[data-state="translated-hidden"] {
   background: linear-gradient(135deg, #4A90D9, #5B6EF5) !important;
-  box-shadow: 0 8px 20px rgba(74, 144, 217, 0.18) !important;
+  box-shadow: none !important;
 }
 
 .nt-fab-button[data-state="error"] {
   background: linear-gradient(135deg, #F97316, #EF4444) !important;
-  box-shadow: 0 8px 20px rgba(239, 68, 68, 0.2) !important;
+  box-shadow: none !important;
 }
 
 .nt-fab-label {
