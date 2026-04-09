@@ -97,6 +97,10 @@ const twitterCompat: SiteCompat = {
     'div[data-testid="UserDescription"]',
     'div[data-testid="birdwatch-pivot"] span',
     'article div[lang]',
+    '[data-testid="twitter-article-title"]',
+    '[data-testid="twitterArticleRichTextView"] .longform-unstyled',
+    '[data-testid="twitterArticleRichTextView"] .longform-header-two',
+    '[data-testid="twitterArticleRichTextView"] .longform-header-three',
   ].join(', '),
   shouldSkipText(text: string): boolean {
     return shouldSkipXMixedChineseText(text);
