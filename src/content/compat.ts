@@ -1,4 +1,5 @@
 import { getMainDomain } from '@shared/site';
+import { shouldSkipXMixedChineseText } from './text-skip';
 
 export { getMainDomain };
 
@@ -13,6 +14,8 @@ export interface SiteCompat {
   containerSelector?: string;
   /** Extra element skip checks beyond the generic shouldSkipElement logic. */
   shouldSkip?: (el: Element, context?: SiteSkipContext) => boolean;
+  /** Optional text-level skip strategy for site-specific mixed-language rules. */
+  shouldSkipText?: (text: string, context?: SiteSkipContext) => boolean;
   /** Additional tag names to treat as translatable paragraphs. */
   extraParagraphTags?: Set<string>;
   /**
@@ -95,6 +98,9 @@ const twitterCompat: SiteCompat = {
     'div[data-testid="birdwatch-pivot"] span',
     'article div[lang]',
   ].join(', '),
+  shouldSkipText(text: string): boolean {
+    return shouldSkipXMixedChineseText(text);
+  },
   shouldSkip(el: Element): boolean {
     const tag = el.tagName;
     if (tag === 'svg' || tag === 'path' || tag === 'g') return true;
