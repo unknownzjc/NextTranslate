@@ -18,6 +18,31 @@ const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '../..');
 const EXTENSION_PATH = path.join(PROJECT_ROOT, 'dist');
 
+const HOSTILE_FLOATING_UI_CSS = `
+  span {
+    top: 100% !important;
+    left: 0 !important;
+    transform: translateY(18px) !important;
+  }
+
+  span::before,
+  span::after {
+    content: '' !important;
+    display: block !important;
+    position: absolute !important;
+    inset: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: 0 0 18px rgba(15, 23, 42, 0.3) !important;
+    background: rgba(255, 255, 255, 0.28) !important;
+  }
+
+  button {
+    filter: drop-shadow(0 0 18px rgba(91, 110, 245, 0.45)) !important;
+    backdrop-filter: blur(12px) !important;
+  }
+`;
+
+
 let server: Server;
 let browser: Browser;
 let extensionPage: Page;
@@ -58,8 +83,21 @@ async function setAutoTranslateSites(sites: Record<string, boolean>) {
   }, sites);
 }
 
-async function openPage(url: string): Promise<Page> {
+async function openPage(
+  url: string,
+  options: { injectHostileFloatingUiCss?: boolean } = {},
+): Promise<Page> {
   const page = await browser.newPage();
+
+  if (options.injectHostileFloatingUiCss) {
+    await page.evaluateOnNewDocument((cssText: string) => {
+      const style = document.createElement('style');
+      style.id = 'nt-hostile-floating-ui-style';
+      style.textContent = cssText;
+      document.documentElement.appendChild(style);
+    }, HOSTILE_FLOATING_UI_CSS);
+  }
+
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 });
   await page.bringToFront();
   return page;
@@ -105,11 +143,13 @@ describe.sequential('same-tab navigation regression', () => {
     });
   });
 
-  it('same-tab 跳转后会取消旧请求，并在新页面对单段 JSON 解析失败自动 fallback 重试', async () => {
+  it('same-tab 跳转后会取消旧请求，并在 hostile host 样式下保持悬浮球稳定', async () => {
     await configureMockProvider(`http://localhost:${mockPort}${NAV_E2E_API_PREFIX}`);
     await setAutoTranslateSites({ localhost: true });
 
-    const page = await openPage(`http://localhost:${mockPort}${NAV_E2E_PAGE_A_PATH}`);
+    const page = await openPage(`http://localhost:${mockPort}${NAV_E2E_PAGE_A_PATH}`, {
+      injectHostileFloatingUiCss: true,
+    });
 
     await page.waitForFunction(() => {
       return document.querySelector('.nt-fab-wrap')?.getAttribute('data-state') === 'translating';
@@ -134,15 +174,49 @@ describe.sequential('same-tab navigation regression', () => {
       return (translation?.textContent?.includes('[翻译]') ?? false) && fabState === 'translated-visible';
     }, { timeout: 120000 });
 
+    await page.hover('.nt-fab-button');
+    await page.waitForFunction(() => {
+      const hint = document.querySelector('.nt-fab-hint') as HTMLElement | null;
+      return hint !== null && Number.parseFloat(getComputedStyle(hint).opacity) > 0.9;
+    }, { timeout: 30000 });
+
+
     const state = await page.evaluate(() => {
       const source = document.querySelector('#page-text');
       const translation = source?.querySelector('.nt-translation');
-      const fabState = document.querySelector('.nt-fab-wrap')?.getAttribute('data-state') ?? null;
+      const wrap = document.querySelector('.nt-fab-wrap') as HTMLElement | null;
+      const button = document.querySelector('.nt-fab-button') as HTMLButtonElement | null;
+      const badge = document.querySelector('.nt-fab-badge') as HTMLSpanElement | null;
+      const hint = document.querySelector('.nt-fab-hint') as HTMLSpanElement | null;
+      const fabState = wrap?.getAttribute('data-state') ?? null;
+      const buttonRect = button?.getBoundingClientRect();
+      const badgeRect = badge?.getBoundingClientRect();
+      const wrapStyle = wrap ? getComputedStyle(wrap) : null;
+      const buttonStyle = button ? getComputedStyle(button) : null;
+      const hintStyle = hint ? getComputedStyle(hint) : null;
+      const hintBeforeStyle = hint ? getComputedStyle(hint, '::before') : null;
+      const hintAfterStyle = hint ? getComputedStyle(hint, '::after') : null;
+
       return {
         sourceText: source?.childNodes[0]?.textContent?.trim() ?? source?.textContent?.trim() ?? null,
         translationText: translation?.textContent?.trim() ?? null,
         fabState,
         hasLoadingPlaceholder: Boolean(document.querySelector('.nt-translation.nt-loading')),
+        fabViewTransitionName: wrapStyle?.viewTransitionName ?? null,
+        fabContain: wrapStyle?.contain ?? null,
+        fabFilter: buttonStyle?.filter ?? null,
+        fabBackdropFilter: buttonStyle?.backdropFilter ?? null,
+        fabBoxShadow: buttonStyle?.boxShadow ?? null,
+        badgeTop: badgeRect?.top ?? null,
+        badgeBottom: badgeRect?.bottom ?? null,
+        buttonBottom: buttonRect?.bottom ?? null,
+        hintOpacity: hintStyle?.opacity ?? null,
+        hintBorderColor: hintStyle?.borderColor ?? null,
+        hintBoxShadow: hintStyle?.boxShadow ?? null,
+        hintBeforeContent: hintBeforeStyle?.content ?? null,
+        hintBeforeDisplay: hintBeforeStyle?.display ?? null,
+        hintAfterContent: hintAfterStyle?.content ?? null,
+        hintAfterDisplay: hintAfterStyle?.display ?? null,
       };
     });
 
@@ -152,6 +226,25 @@ describe.sequential('same-tab navigation regression', () => {
     expect(state.translationText).not.toBe(`[翻译] ${NAV_E2E_PAGE_A_TEXT}`);
     expect(state.fabState).toBe('translated-visible');
     expect(state.hasLoadingPlaceholder).toBe(false);
+    expect(state.fabViewTransitionName).toBe('none');
+    expect(state.fabContain).not.toContain('paint');
+    expect(state.fabFilter).toBe('none');
+    expect(state.fabBackdropFilter).toBe('none');
+    expect(state.fabBoxShadow).toBe('none');
+    expect(state.badgeTop).not.toBeNull();
+    expect(state.badgeBottom).not.toBeNull();
+    expect(state.buttonBottom).not.toBeNull();
+    expect(state.badgeTop!).toBeLessThan(state.buttonBottom! - 2);
+    expect(state.badgeBottom!).toBeGreaterThan(state.buttonBottom! - 12);
+
+    expect(Number.parseFloat(state.hintOpacity!)).toBeGreaterThan(0.9);
+    expect(state.hintBorderColor).not.toBe('rgba(0, 0, 0, 0)');
+    expect(state.hintBoxShadow).toBe('none');
+    expect(state.hintBeforeContent).toBe('none');
+    expect(state.hintBeforeDisplay).toBe('none');
+    expect(state.hintAfterContent).toBe('none');
+    expect(state.hintAfterDisplay).toBe('none');
+
 
     await page.close();
     await setAutoTranslateSites({});
