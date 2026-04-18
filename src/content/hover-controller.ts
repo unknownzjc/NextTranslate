@@ -1,9 +1,5 @@
 const COOLDOWN_MS = 1500;
 
-function isMac(): boolean {
-  return /Mac|iPhone|iPad/.test(navigator.platform);
-}
-
 export interface HoverControllerOptions {
   onTrigger: (element: Element) => boolean | Promise<boolean>;
   resolveCandidate: (target: EventTarget | null) => Element | null;
@@ -14,6 +10,8 @@ export class HoverController {
   private options: HoverControllerOptions;
   private currentCandidate: Element | null = null;
   private modifierDown = false;
+  private modifierCandidate: Element | null = null;
+  private modifierCancelled = false;
   private enabled = false;
   private cooldownSet = new Set<Element>();
   private pendingSet = new Set<Element>();
@@ -39,39 +37,56 @@ export class HoverController {
 
     this.handleKeyDown = (e: Event) => {
       const ke = e as KeyboardEvent;
-      if (!this.isModifierKey(ke)) return;
-      if (this.modifierDown) return; // already held down - one-shot
-
+      if (this.modifierDown) {
+        if (!this.isPlainControlKey(ke)) {
+          this.modifierCancelled = true;
+        }
+        return;
+      }
+      if (!this.isPlainControlKey(ke)) return;
       this.modifierDown = true;
-
-      if (!this.currentCandidate) return;
-      if (this.cooldownSet.has(this.currentCandidate) || this.pendingSet.has(this.currentCandidate)) return;
-
-      const el = this.currentCandidate;
-      this.pendingSet.add(el);
-      void Promise.resolve(this.options.onTrigger(el)).then((started) => {
-        this.pendingSet.delete(el);
-        if (!started) return;
-        if (this.cooldownSet.has(el)) return;
-
-        // Start cooldown only after the trigger is actually accepted.
-        this.cooldownSet.add(el);
-        const timer = setTimeout(() => {
-          this.cooldownSet.delete(el);
-          this.cooldownTimers.delete(el);
-        }, COOLDOWN_MS);
-        this.cooldownTimers.set(el, timer);
-      }).catch(() => {
-        this.pendingSet.delete(el);
-        // Orchestrator handles its own error UI.
-      });
+      this.modifierCancelled = false;
+      this.modifierCandidate = this.currentCandidate;
     };
 
     this.handleKeyUp = (e: Event) => {
       const ke = e as KeyboardEvent;
-      if (!this.isModifierKeyUp(ke)) return;
+      if (!this.isControlKey(ke)) {
+        if (this.modifierDown) {
+          this.modifierCancelled = true;
+        }
+        return;
+      }
+
+      const el = this.modifierCancelled ? null : this.modifierCandidate;
       this.modifierDown = false;
+      this.modifierCandidate = null;
+      this.modifierCancelled = false;
+
+      if (!el) return;
+      this.triggerCandidate(el);
     };
+  }
+
+  private triggerCandidate(el: Element): void {
+    if (this.cooldownSet.has(el) || this.pendingSet.has(el)) return;
+    this.pendingSet.add(el);
+    void Promise.resolve(this.options.onTrigger(el)).then((started) => {
+      this.pendingSet.delete(el);
+      if (!started) return;
+      if (this.cooldownSet.has(el)) return;
+
+      // Start cooldown only after the trigger is actually accepted.
+      this.cooldownSet.add(el);
+      const timer = setTimeout(() => {
+        this.cooldownSet.delete(el);
+        this.cooldownTimers.delete(el);
+      }, COOLDOWN_MS);
+      this.cooldownTimers.set(el, timer);
+    }).catch(() => {
+      this.pendingSet.delete(el);
+      // Orchestrator handles its own error UI.
+    });
   }
 
   enable(): void {
@@ -94,6 +109,8 @@ export class HoverController {
   reset(): void {
     this.clearCandidate();
     this.modifierDown = false;
+    this.modifierCandidate = null;
+    this.modifierCancelled = false;
     for (const timer of this.cooldownTimers.values()) {
       clearTimeout(timer);
     }
@@ -111,11 +128,11 @@ export class HoverController {
     this.currentCandidate = null;
   }
 
-  private isModifierKey(e: KeyboardEvent): boolean {
-    return isMac() ? e.metaKey && e.key === 'Meta' : e.ctrlKey && e.key === 'Control';
+  private isPlainControlKey(e: KeyboardEvent): boolean {
+    return e.key === 'Control' && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
   }
 
-  private isModifierKeyUp(e: KeyboardEvent): boolean {
-    return isMac() ? e.key === 'Meta' : e.key === 'Control';
+  private isControlKey(e: KeyboardEvent): boolean {
+    return e.key === 'Control';
   }
 }

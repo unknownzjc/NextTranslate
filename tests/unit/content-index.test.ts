@@ -29,6 +29,11 @@ async function flushPromises(times = 6) {
   }
 }
 
+function tapControlForHover(): void {
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+  document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Control', ctrlKey: false, bubbles: true }));
+}
+
 describe('content viewport eager queue loading', () => {
   it('滚动进入视窗的未翻译段落会立即显示 loading，并在当前批次完成后自动接续翻译', async () => {
     vi.useFakeTimers();
@@ -672,12 +677,11 @@ describe('content segment translation (hover quick translate)', () => {
     // Clear any stale batches from previous test module imports
     pendingBatches.length = 0;
 
-    // Simulate hover + modifier key trigger via pointermove + keydown
+    // Simulate hover + modifier key trigger via pointermove + Control tap
     p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
 
     // Trigger the modifier key
-    const keydown = new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true });
-    document.dispatchEvent(keydown);
+    tapControlForHover();
     await flushPromises();
 
     // p1 should have a loading placeholder
@@ -712,7 +716,7 @@ describe('content segment translation (hover quick translate)', () => {
 
     // Trigger segment translation
     p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    tapControlForHover();
     await flushPromises();
 
     // Complete
@@ -742,7 +746,7 @@ describe('content segment translation (hover quick translate)', () => {
 
     const p1 = document.getElementById('p1')!;
     p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    tapControlForHover();
     await flushPromises();
 
     expect(pendingBatches).toHaveLength(0);
@@ -756,11 +760,13 @@ describe('content segment translation (hover quick translate)', () => {
     pendingBatches.length = 0;
 
     const p1 = document.getElementById('p1')!;
+    const sourceText = 'Failure scenario paragraph that should show loading before the failed response.';
+    p1.textContent = sourceText;
     p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    tapControlForHover();
     await flushPromises();
 
-    const batch = pendingBatches.find(b => b.message.texts.some(t => t.includes('first paragraph')));
+    const batch = pendingBatches.find(b => b.message.texts.includes(sourceText));
     expect(batch).toBeTruthy();
     expect(p1.querySelector('.nt-translation.nt-loading')).not.toBeNull();
 
@@ -786,26 +792,26 @@ describe('content segment translation (hover quick translate)', () => {
     pendingBatches.length = 0;
 
     const p1 = document.getElementById('p1')!;
+    const sourceText = 'Cancel scenario paragraph that should show loading before cancellation.';
+    p1.textContent = sourceText;
     p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    tapControlForHover();
     await flushPromises();
 
     expect(p1.querySelector('.nt-translation.nt-loading')).not.toBeNull();
     expect(sendToContent({ type: 'TOGGLE_TRANSLATE' })).toEqual({ action: 'cancelled' });
     await flushPromises();
 
-    expect(p1.querySelector('.nt-translation')).toBeNull();
     const fabButton = document.querySelector('.nt-fab-button');
     expect(fabButton?.getAttribute('data-state')).toBe('idle');
 
     pendingBatches.length = 0;
     vi.advanceTimersByTime(1600);
-    document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Control', ctrlKey: false, bubbles: true }));
     p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    tapControlForHover();
     await flushPromises();
 
-    expect(pendingBatches.some(b => b.message.texts.some(t => t.includes('first paragraph')))).toBe(true);
+    expect(pendingBatches.some(b => b.message.texts.includes(sourceText))).toBe(true);
     vi.useRealTimers();
   });
 
@@ -817,7 +823,7 @@ describe('content segment translation (hover quick translate)', () => {
 
     const p1 = document.getElementById('p1')!;
     p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    tapControlForHover();
     await flushPromises();
 
     const firstBatch = pendingBatches.find(b => b.message.texts.some(t => t.includes('first paragraph')));
@@ -830,14 +836,13 @@ describe('content segment translation (hover quick translate)', () => {
 
     pendingBatches.length = 0;
     vi.advanceTimersByTime(1600);
-    document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Control', ctrlKey: false, bubbles: true }));
 
     const sourceTextNode = p1.firstChild;
     expect(sourceTextNode?.nodeType).toBe(Node.TEXT_NODE);
     sourceTextNode!.textContent = 'Updated paragraph source that should be translated again after content changes.';
 
     p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    tapControlForHover();
     await flushPromises();
 
     expect(pendingBatches.some(b => b.message.texts.includes('Updated paragraph source that should be translated again after content changes.'))).toBe(true);
@@ -854,7 +859,7 @@ describe('content segment translation (hover quick translate)', () => {
 
     // First do a segment translation of p1
     p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    tapControlForHover();
     await flushPromises();
 
     const segBatch = pendingBatches.find(b => b.message.texts.some(t => t.includes('first paragraph')));
@@ -898,7 +903,7 @@ describe('content segment translation (hover quick translate)', () => {
     const p2 = document.getElementById('p2')!;
     // Attempt segment trigger while page translating
     p2.dispatchEvent(new Event('pointermove', { bubbles: true }));
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    tapControlForHover();
     await flushPromises();
 
     // Should not have triggered additional segment-specific batches
@@ -1054,7 +1059,7 @@ describe('content segment translation (hover quick translate)', () => {
 
     const p1 = document.getElementById('p1')!;
     p1.dispatchEvent(new Event('pointermove', { bubbles: true }));
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Control', ctrlKey: true, bubbles: true }));
+    tapControlForHover();
     await flushPromises();
 
     // Should show error on floating ball

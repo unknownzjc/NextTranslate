@@ -16,6 +16,19 @@ function dispatch(target: EventTarget, type: string, init?: Record<string, unkno
   target.dispatchEvent(event);
 }
 
+function pressControl(): void {
+  dispatch(document, 'keydown', { key: 'Control', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false });
+}
+
+function releaseControl(): void {
+  dispatch(document, 'keyup', { key: 'Control', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false });
+}
+
+function tapControl(): void {
+  pressControl();
+  releaseControl();
+}
+
 describe('HoverController', () => {
   let controller: HoverController;
   let onTrigger: ReturnType<typeof vi.fn<(element: Element) => boolean | Promise<boolean>>>;
@@ -70,11 +83,10 @@ describe('HoverController', () => {
     expect(resolveCandidate).toHaveBeenCalledWith(em);
   });
 
-  it('macOS 使用 Meta 触发', () => {
+  it('macOS 使用 Control 触发，Command 不触发', () => {
     const originalPlatform = navigator.platform;
     Object.defineProperty(navigator, 'platform', { value: 'MacIntel', configurable: true });
 
-    // Recreate controller to pick up platform
     controller.destroy();
     controller = new HoverController({ onTrigger, resolveCandidate, isTranslatable });
     controller.enable();
@@ -84,6 +96,9 @@ describe('HoverController', () => {
 
     dispatch(p, 'pointermove', { target: p });
     dispatch(document, 'keydown', { key: 'Meta', metaKey: true, ctrlKey: false });
+    expect(onTrigger).not.toHaveBeenCalled();
+
+    tapControl();
 
     expect(onTrigger).toHaveBeenCalledWith(p);
 
@@ -102,22 +117,24 @@ describe('HoverController', () => {
     resolveCandidate.mockReturnValue(p);
 
     dispatch(p, 'pointermove', { target: p });
-    dispatch(document, 'keydown', { key: 'Control', ctrlKey: true, metaKey: false });
+    tapControl();
 
     expect(onTrigger).toHaveBeenCalledWith(p);
 
     Object.defineProperty(navigator, 'platform', { value: originalPlatform, configurable: true });
   });
 
-  it('one-shot 语义：按住不松手只触发一次', () => {
+  it('one-shot 语义：按住不松手不会触发，松开只触发一次', () => {
     const p = createParagraph('Hello world test paragraph');
     resolveCandidate.mockReturnValue(p);
 
     dispatch(p, 'pointermove', { target: p });
-    dispatch(document, 'keydown', { key: 'Control', ctrlKey: true, metaKey: false });
-    dispatch(document, 'keydown', { key: 'Control', ctrlKey: true, metaKey: false });
-    dispatch(document, 'keydown', { key: 'Control', ctrlKey: true, metaKey: false });
+    pressControl();
+    pressControl();
+    pressControl();
+    expect(onTrigger).not.toHaveBeenCalled();
 
+    releaseControl();
     expect(onTrigger).toHaveBeenCalledTimes(1);
   });
 
@@ -127,15 +144,39 @@ describe('HoverController', () => {
 
     resolveCandidate.mockReturnValue(p1);
     dispatch(p1, 'pointermove', { target: p1 });
-    dispatch(document, 'keydown', { key: 'Control', ctrlKey: true, metaKey: false });
-    expect(onTrigger).toHaveBeenCalledTimes(1);
+    pressControl();
+    expect(onTrigger).not.toHaveBeenCalled();
 
     // Move to p2 while key is still held
     resolveCandidate.mockReturnValue(p2);
     dispatch(p2, 'pointermove', { target: p2 });
 
-    // Should NOT trigger for p2 (key was already down)
+    releaseControl();
     expect(onTrigger).toHaveBeenCalledTimes(1);
+    expect(onTrigger).toHaveBeenCalledWith(p1);
+  });
+
+  it('Control 组合其他普通按键时不会触发', () => {
+    const p = createParagraph('Hello world test paragraph');
+    resolveCandidate.mockReturnValue(p);
+
+    dispatch(p, 'pointermove', { target: p });
+    pressControl();
+    dispatch(document, 'keydown', { key: 'c', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false });
+    releaseControl();
+
+    expect(onTrigger).not.toHaveBeenCalled();
+  });
+
+  it('Control 同时带其他修饰键时不会触发', () => {
+    const p = createParagraph('Hello world test paragraph');
+    resolveCandidate.mockReturnValue(p);
+
+    dispatch(p, 'pointermove', { target: p });
+    dispatch(document, 'keydown', { key: 'Control', ctrlKey: true, metaKey: false, altKey: false, shiftKey: true });
+    releaseControl();
+
+    expect(onTrigger).not.toHaveBeenCalled();
   });
 
   it('冷却机制阻止同段重复触发', async () => {
@@ -145,19 +186,17 @@ describe('HoverController', () => {
 
     // First trigger
     dispatch(p, 'pointermove', { target: p });
-    dispatch(document, 'keydown', { key: 'Control', ctrlKey: true, metaKey: false });
-    dispatch(document, 'keyup', { key: 'Control', ctrlKey: false });
+    tapControl();
     expect(onTrigger).toHaveBeenCalledTimes(1);
     await Promise.resolve();
 
     // Second attempt within cooldown
-    dispatch(document, 'keydown', { key: 'Control', ctrlKey: true, metaKey: false });
-    dispatch(document, 'keyup', { key: 'Control', ctrlKey: false });
+    tapControl();
     expect(onTrigger).toHaveBeenCalledTimes(1);
 
     // After cooldown expires
     vi.advanceTimersByTime(1600);
-    dispatch(document, 'keydown', { key: 'Control', ctrlKey: true, metaKey: false });
+    tapControl();
     expect(onTrigger).toHaveBeenCalledTimes(2);
 
     vi.useRealTimers();
@@ -169,11 +208,10 @@ describe('HoverController', () => {
     onTrigger.mockReturnValue(false);
 
     dispatch(p, 'pointermove', { target: p });
-    dispatch(document, 'keydown', { key: 'Control', ctrlKey: true, metaKey: false });
-    dispatch(document, 'keyup', { key: 'Control', ctrlKey: false, metaKey: false });
+    tapControl();
     await Promise.resolve();
 
-    dispatch(document, 'keydown', { key: 'Control', ctrlKey: true, metaKey: false });
+    tapControl();
     await Promise.resolve();
 
     expect(onTrigger).toHaveBeenCalledTimes(2);
@@ -186,7 +224,7 @@ describe('HoverController', () => {
     controller.disable();
 
     dispatch(p, 'pointermove', { target: p });
-    dispatch(document, 'keydown', { key: 'Control', ctrlKey: true, metaKey: false });
+    tapControl();
 
     expect(onTrigger).not.toHaveBeenCalled();
   });
@@ -198,8 +236,7 @@ describe('HoverController', () => {
 
     // Trigger once
     dispatch(p, 'pointermove', { target: p });
-    dispatch(document, 'keydown', { key: 'Control', ctrlKey: true, metaKey: false });
-    dispatch(document, 'keyup', { key: 'Control', ctrlKey: false });
+    tapControl();
     expect(onTrigger).toHaveBeenCalledTimes(1);
 
     // Reset
@@ -208,7 +245,7 @@ describe('HoverController', () => {
 
     // Can trigger again immediately (cooldown cleared)
     dispatch(p, 'pointermove', { target: p });
-    dispatch(document, 'keydown', { key: 'Control', ctrlKey: true, metaKey: false });
+    tapControl();
     expect(onTrigger).toHaveBeenCalledTimes(2);
 
     vi.useRealTimers();
@@ -222,7 +259,7 @@ describe('HoverController', () => {
     dispatch(p, 'pointermove', { target: p });
     expect(p.classList.contains('nt-hover-candidate')).toBe(false);
 
-    dispatch(document, 'keydown', { key: 'Control', ctrlKey: true, metaKey: false });
+    tapControl();
     expect(onTrigger).not.toHaveBeenCalled();
   });
 
