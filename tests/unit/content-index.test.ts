@@ -387,6 +387,120 @@ describe('content SPA auto translate', () => {
       'New SPA article content should be translated automatically after navigation.',
     ]);
   });
+
+  it('回退/前进不会继承悬浮球全文翻译，也不会触发新页面自动翻译', async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } })
+      .happyDOM.setURL('https://example.com/current-article');
+
+    document.body.innerHTML = `
+      <main>
+        <p>Current page content that is translated from the floating ball.</p>
+      </main>
+    `;
+
+    vi.doMock('@shared/storage', () => ({
+      loadProviderConfig: vi.fn(async () => ({
+        endpoint: 'https://api.example.com',
+        apiKey: 'test-key',
+        model: 'test-model',
+        targetLanguage: 'Simplified Chinese',
+        jsonMode: 'auto',
+      })),
+      isProviderConfigured: vi.fn(() => true),
+      isAutoTranslateEnabledForUrl: vi.fn(async () => true),
+    }));
+
+    vi.doMock('../../src/content/extractor', async () => {
+      const actual = await vi.importActual<typeof import('../../src/content/extractor')>('../../src/content/extractor');
+
+      return {
+        ...actual,
+        findMainContainer: vi.fn(async () => document.querySelector('main')!),
+        collectParagraphs: vi.fn((container: Element, shouldSkipTranslated = () => false, includeElement = () => true) => {
+          return Array.from(container.querySelectorAll('p'))
+            .map((element) => ({
+              element,
+              text: element.textContent?.trim() ?? '',
+              codeMap: new Map<string, string>(),
+            }))
+            .filter(({ element, text }) => text.length >= 10 && includeElement(element) && !shouldSkipTranslated(element, text));
+        }),
+      };
+    });
+
+    const pendingBatches: PendingBatch[] = [];
+    const runtimeListeners: Array<(message: unknown, sender: unknown, sendResponse: (response: unknown) => void) => void> = [];
+
+    vi.stubGlobal('chrome', {
+      runtime: {
+        id: 'test-extension',
+        onMessage: {
+          addListener: vi.fn((listener: (message: unknown, sender: unknown, sendResponse: (response: unknown) => void) => void) => {
+            runtimeListeners.push(listener);
+          }),
+        },
+        sendMessage: vi.fn((message: { type: string; batchId?: string; texts?: string[] }) => {
+          if (message.type === 'TRANSLATE_BATCH') {
+            return new Promise((resolve) => {
+              pendingBatches.push({
+                message: {
+                  type: message.type,
+                  batchId: message.batchId!,
+                  texts: message.texts ?? [],
+                },
+                resolve: resolve as PendingBatch['resolve'],
+              });
+            });
+          }
+          return Promise.resolve({});
+        }),
+      },
+    });
+
+    await import('../../src/content/index');
+
+    const sendToContent = (message: { type: string }) => {
+      let response: unknown;
+      for (const listener of runtimeListeners) {
+        listener(message, {}, (value) => {
+          response = value;
+        });
+      }
+      return response;
+    };
+
+    expect(sendToContent({ type: 'TOGGLE_TRANSLATE' })).toEqual({ action: 'started' });
+    await flushPromises();
+
+    expect(pendingBatches).toHaveLength(1);
+    const currentBatch = pendingBatches.shift()!;
+    currentBatch.resolve({
+      batchId: currentBatch.message.batchId,
+      translations: ['当前页译文'],
+    });
+    await flushPromises();
+    expect(document.querySelector('.nt-translation')?.textContent).toBe('当前页译文');
+
+    pendingBatches.length = 0;
+    (window as typeof window & { happyDOM: { setURL: (url: string) => void } })
+      .happyDOM.setURL('https://example.com/previous-article');
+    document.body.innerHTML = `
+      <main>
+        <p>Previous page content should stay untranslated after history traversal.</p>
+      </main>
+    `;
+    window.dispatchEvent(new Event('popstate'));
+
+    await vi.advanceTimersByTimeAsync(320);
+    await flushPromises();
+
+    expect(pendingBatches).toHaveLength(0);
+    expect(document.querySelector('.nt-translation')).toBeNull();
+    vi.useRealTimers();
+  });
 });
 
 describe('content segment translation (hover quick translate)', () => {

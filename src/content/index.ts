@@ -870,7 +870,7 @@ function stopObserver() {
 
 let currentNavigationKey = getNavigationKey();
 
-function handleSpaNavigation(nextUrl?: string) {
+function handleSpaNavigation(nextUrl?: string, options: { autoTranslateAfterNavigation?: boolean } = {}) {
   const nextNavigationKey = getNavigationKey(nextUrl);
   if (nextNavigationKey === currentNavigationKey) return;
   currentNavigationKey = nextNavigationKey;
@@ -892,7 +892,9 @@ function handleSpaNavigation(nextUrl?: string) {
   mainContainer = null;
   hoverController.reset();
   syncFloatingBallState();
-  scheduleAutoTranslateAfterSpaNavigation();
+  if (options.autoTranslateAfterNavigation) {
+    scheduleAutoTranslateAfterSpaNavigation();
+  }
 }
 
 window.addEventListener('popstate', () => handleSpaNavigation());
@@ -902,12 +904,18 @@ const originalReplaceState = history.replaceState;
 
 history.pushState = function (...args) {
   originalPushState.apply(this, args);
-  handleSpaNavigation(typeof args[2] === 'string' || args[2] instanceof URL ? String(args[2]) : undefined);
+  handleSpaNavigation(
+    typeof args[2] === 'string' || args[2] instanceof URL ? String(args[2]) : undefined,
+    { autoTranslateAfterNavigation: true },
+  );
 };
 
 history.replaceState = function (...args) {
   originalReplaceState.apply(this, args);
-  handleSpaNavigation(typeof args[2] === 'string' || args[2] instanceof URL ? String(args[2]) : undefined);
+  handleSpaNavigation(
+    typeof args[2] === 'string' || args[2] instanceof URL ? String(args[2]) : undefined,
+    { autoTranslateAfterNavigation: true },
+  );
 };
 
 const hoverController = new HoverController({
