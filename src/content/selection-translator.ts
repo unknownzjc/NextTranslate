@@ -20,7 +20,10 @@ export class SelectionTranslator {
   private currentRequestId: string | null = null;
   private showTimer: ReturnType<typeof setTimeout> | null = null;
   private hideTimer: ReturnType<typeof setTimeout> | null = null;
+  private isMouseSelecting = false;
   private selectionChangeHandler: (() => void) | null = null;
+  private mouseDownHandler: (() => void) | null = null;
+  private mouseUpHandler: (() => void) | null = null;
   private dotEnterHandler: (() => void) | null = null;
   private dotLeaveHandler: (() => void) | null = null;
 
@@ -34,6 +37,11 @@ export class SelectionTranslator {
 
     this.selectionChangeHandler = () => this.handleSelectionChange();
     document.addEventListener('selectionchange', this.selectionChangeHandler, { signal: this.signal });
+
+    this.mouseDownHandler = () => this.handleMouseDown();
+    this.mouseUpHandler = () => this.handleMouseUp();
+    document.addEventListener('mousedown', this.mouseDownHandler, { signal: this.signal });
+    document.addEventListener('mouseup', this.mouseUpHandler, { signal: this.signal });
 
     // Auto-cleanup on abort
     this.signal.addEventListener('abort', () => this.destroy(), { once: true });
@@ -184,7 +192,24 @@ export class SelectionTranslator {
 
   // --- Private: event handlers ---
 
+  private handleMouseDown(): void {
+    this.isMouseSelecting = true;
+    this.hideDot();
+  }
+
+  private handleMouseUp(): void {
+    this.isMouseSelecting = false;
+    // Let the browser finalize the selection, then check
+    setTimeout(() => this.handleSelectionChange(), 0);
+  }
+
   private handleSelectionChange(): void {
+    // Suppress dot during mouse selection — only show after mouseup
+    if (this.isMouseSelecting) {
+      this.hideDot();
+      return;
+    }
+
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) {
       this.hideDot();
