@@ -305,6 +305,99 @@ describe('content auto-start message', () => {
     expect((document.querySelector('.nt-translation') as HTMLElement | null)?.textContent).toBe('首次译文');
     expect((document.querySelector('.nt-translation') as HTMLElement | null)?.style.display).not.toBe('none');
   });
+
+  it('后台 auto 启动消息不会在 history restore 页面触发翻译', async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+
+    document.body.innerHTML = `
+      <main>
+        <p id="p1">History restored page content should not be auto translated.</p>
+      </main>
+    `;
+
+    vi.doMock('@shared/storage', () => ({
+      loadProviderConfig: vi.fn(async () => ({
+        endpoint: 'https://api.example.com',
+        apiKey: 'test-key',
+        model: 'test-model',
+        targetLanguage: 'Simplified Chinese',
+        jsonMode: 'auto',
+      })),
+      isProviderConfigured: vi.fn(() => true),
+      isAutoTranslateEnabledForUrl: vi.fn(async () => true),
+    }));
+
+    vi.doMock('../../src/content/extractor', async () => {
+      const actual = await vi.importActual<typeof import('../../src/content/extractor')>('../../src/content/extractor');
+
+      return {
+        ...actual,
+        findMainContainer: vi.fn(async () => document.querySelector('main')!),
+        collectParagraphs: vi.fn((container: Element, shouldSkipTranslated = () => false, includeElement = () => true) => {
+          return Array.from(container.querySelectorAll('p'))
+            .map((element) => ({
+              element,
+              text: element.textContent?.trim() ?? '',
+              codeMap: new Map<string, string>(),
+            }))
+            .filter(({ element, text }) => text.length >= 10 && includeElement(element) && !shouldSkipTranslated(element, text));
+        }),
+      };
+    });
+
+    const pendingBatches: PendingBatch[] = [];
+    const runtimeListeners: Array<(message: unknown, sender: unknown, sendResponse: (response: unknown) => void) => void> = [];
+
+    vi.stubGlobal('chrome', {
+      runtime: {
+        id: 'test-extension',
+        onMessage: {
+          addListener: vi.fn((listener: (message: unknown, sender: unknown, sendResponse: (response: unknown) => void) => void) => {
+            runtimeListeners.push(listener);
+          }),
+        },
+        sendMessage: vi.fn((message: { type: string; batchId?: string; texts?: string[] }) => {
+          if (message.type === 'TRANSLATE_BATCH') {
+            return new Promise((resolve) => {
+              pendingBatches.push({
+                message: {
+                  type: message.type,
+                  batchId: message.batchId!,
+                  texts: message.texts ?? [],
+                },
+                resolve: resolve as PendingBatch['resolve'],
+              });
+            });
+          }
+          return Promise.resolve({});
+        }),
+      },
+    });
+
+    await import('../../src/content/index');
+
+    const event = new Event('pageshow') as PageTransitionEvent;
+    Object.defineProperty(event, 'persisted', {
+      configurable: true,
+      value: true,
+    });
+    window.dispatchEvent(event);
+
+    let response: unknown;
+    for (const listener of runtimeListeners) {
+      listener({ type: 'START_TRANSLATE_IF_IDLE', reason: 'auto' }, {}, (value) => {
+        response = value;
+      });
+    }
+
+    await flushPromises();
+
+    expect(response).toEqual({ started: false });
+    expect(pendingBatches).toHaveLength(0);
+    expect(document.querySelector('.nt-translation')).toBeNull();
+    vi.useRealTimers();
+  });
 });
 
 describe('content SPA auto translate', () => {
@@ -939,8 +1032,8 @@ describe('content segment translation (hover quick translate)', () => {
     expect(showResponse).toEqual({ action: 'toggled_visible' });
   });
 
-  it('page 中单段失败会显示 retry marker，其它段继续完成并保持 done + page 语义', async () => {
-    const { p1, p2, sendToContent } = await setupFailedPageTranslation();
+  it('page 中单段失败后，再次点击翻译全文只会继续翻译失败段落', async () => {
+    const { pendingBatches, p1, p2, p3, failedText, successText, thirdText, sendToContent } = await setupFailedPageTranslation();
 
     expect(p1.querySelector('.nt-retry-marker')).not.toBeNull();
     expect(p1.querySelector('.nt-translation')).toBeNull();
@@ -948,10 +1041,55 @@ describe('content segment translation (hover quick translate)', () => {
 
     const fabButton = document.querySelector('.nt-fab-button');
     expect(fabButton?.getAttribute('data-state')).toBe('translated-visible');
+
+    expect(sendToContent({ type: 'TOGGLE_TRANSLATE' })).toEqual({ action: 'started' });
+    await flushPromises();
+
+    expect(pendingBatches).toHaveLength(1);
+    expect(pendingBatches[0].message.texts).toEqual([failedText]);
+    expect(pendingBatches[0].message.texts).not.toContain(successText);
+    expect(pendingBatches[0].message.texts).not.toContain(thirdText);
+    expect(p1.querySelector('.nt-retry-marker')).toBeNull();
+    expect(p1.querySelector('.nt-translation.nt-loading')).not.toBeNull();
+
+    const retryBatch = pendingBatches.shift()!;
+    retryBatch.resolve({
+      batchId: retryBatch.message.batchId,
+      translations: ['失败段落继续翻译成功'],
+    });
+    await flushPromises();
+
+    expect(p1.querySelector('.nt-retry-marker')).toBeNull();
+    expect(p1.querySelector('.nt-translation')?.textContent).toBe('失败段落继续翻译成功');
+    expect(p2.querySelector('.nt-translation')?.textContent).toBe('第二段译文');
+    expect(p3.querySelector('.nt-translation')?.textContent).toBe('第三段译文');
+
     expect(sendToContent({ type: 'TOGGLE_TRANSLATE' })).toEqual({ action: 'toggled_hidden' });
-    expect((p1.querySelector('.nt-retry-marker') as HTMLElement | null)?.style.display).toBe('none');
     expect(sendToContent({ type: 'TOGGLE_TRANSLATE' })).toEqual({ action: 'toggled_visible' });
+  });
+
+  it('继续翻译失败段落再次失败后，保留 retry marker 并允许再次继续', async () => {
+    const { pendingBatches, p1, failedText, sendToContent } = await setupFailedPageTranslation();
+
+    expect(sendToContent({ type: 'TOGGLE_TRANSLATE' })).toEqual({ action: 'started' });
+    await flushPromises();
+
+    expect(pendingBatches).toHaveLength(1);
+    expect(pendingBatches[0].message.texts).toEqual([failedText]);
+    const failedRetryBatch = pendingBatches.shift()!;
+    failedRetryBatch.resolve({
+      batchId: failedRetryBatch.message.batchId,
+      translations: [],
+    });
+    await flushPromises();
+
+    expect(p1.querySelector('.nt-translation.nt-loading')).toBeNull();
     expect(p1.querySelector('.nt-retry-marker')).not.toBeNull();
+    expect(sendToContent({ type: 'TOGGLE_TRANSLATE' })).toEqual({ action: 'started' });
+    await flushPromises();
+
+    expect(pendingBatches).toHaveLength(1);
+    expect(pendingBatches[0].message.texts).toEqual([failedText]);
   });
 
   it('page failed retry icon 点击后只重试该段，并保持 page done 语义', async () => {

@@ -264,6 +264,13 @@ function updateStatusUI(status: TranslateStatusMsg) {
       translateBtn.textContent = '取消翻译';
       break;
     case 'done':
+      if (status.failedCount && status.failedCount > 0) {
+        statusBar.textContent = `${status.failedCount} 段翻译失败，点击“翻译全文”继续`;
+        statusBar.className = 'error';
+        translateBtn.textContent = '翻译全文';
+        break;
+      }
+
       statusBar.textContent = '翻译完成';
       statusBar.className = 'done';
       translateBtn.textContent = '隐藏译文';

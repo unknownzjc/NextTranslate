@@ -3,7 +3,7 @@
   "name": "NextTranslate",
   "version": "0.1.0",
   "description": "AI-powered webpage translator - translate English content to Chinese inline",
-  "permissions": ["activeTab", "storage", "scripting", "alarms", "contextMenus"],
+  "permissions": ["activeTab", "storage", "scripting", "alarms", "contextMenus", "webNavigation"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": {
     "service_worker": "background/index.js",

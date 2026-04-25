@@ -88,6 +88,49 @@ describe('Translator incremental re-render handling', () => {
     expect(translated).toContain('取消后重试成功');
   });
 
+  it('翻译结果数量不匹配时会标记批次失败，避免 loading 永久残留', async () => {
+    const container = document.createElement('main');
+    const failedEl = document.createElement('p');
+    const failedText = 'Mismatch response paragraph should not stay loading forever.';
+    failedEl.textContent = failedText;
+    container.appendChild(failedEl);
+    document.body.innerHTML = '';
+    document.body.appendChild(container);
+
+    vi.stubGlobal('chrome', {
+      runtime: {
+        id: 'test-extension',
+        sendMessage: vi.fn((message: { type: string }) => {
+          if (message.type === 'TRANSLATE_BATCH') {
+            return Promise.resolve({ batchId: 'mismatch-batch', translations: [] });
+          }
+          return Promise.resolve({});
+        }),
+      },
+    });
+
+    const failedBlocks: Array<{ element: Element; error: string }> = [];
+    const progress: Array<[number, number]> = [];
+
+    await new Promise<void>((resolve, reject) => {
+      const translator = new Translator({
+        onBatchTranslated: () => reject(new Error('unexpected translation')),
+        onProgress: (completed, total) => progress.push([completed, total]),
+        onComplete: () => resolve(),
+        onError: (error) => reject(new Error(`unexpected onError: ${error}`)),
+        onCancelled: () => reject(new Error('unexpected cancel')),
+        onBlockFailed: (element, error) => failedBlocks.push({ element, error }),
+      });
+
+      void translator.start(container, 'Simplified Chinese', {
+        paragraphs: [{ element: failedEl, text: failedText, codeMap: new Map() }],
+      });
+    });
+
+    expect(failedBlocks).toEqual([{ element: failedEl, error: '翻译结果数量不匹配，请重试' }]);
+    expect(progress.at(-1)).toEqual([1, 1]);
+  });
+
   it('单批次失败不会中止整页，其他段落仍会继续完成', async () => {
     const container = document.createElement('main');
     const failedEl = document.createElement('p');
