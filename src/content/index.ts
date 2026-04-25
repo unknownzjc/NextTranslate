@@ -1,4 +1,5 @@
 import type {
+  StartTranslateIfIdleMsg,
   StartTranslateIfIdleResponse,
   ToggleTranslateResponse,
   TranslateStatusMsg,
@@ -13,6 +14,7 @@ import {
   extractTextWithCodeProtection,
   findMainContainer,
   resolveHoverParagraphCandidate,
+  type ExtractedParagraph,
 } from './extractor';
 import { Translator } from './translator';
 import { Injector } from './injector';
@@ -38,6 +40,23 @@ const VIEWPORT_TRANSLATION_MARGIN_PX = 520;
 const DOM_WORK_DEBOUNCE_MS = 180;
 const SCROLL_IDLE_MS = 140;
 const SPA_AUTO_TRANSLATE_DELAY_MS = 320;
+const CONTENT_CLEANUP_KEY = '__NT_CONTENT_CLEANUP__';
+const HISTORY_PATCH_KEY = '__NT_HISTORY_PATCH__';
+
+type SpaNavigationOptions = { autoTranslateAfterNavigation?: boolean };
+type HistoryPatchState = {
+  originalPushState: History['pushState'];
+  originalReplaceState: History['replaceState'];
+  handleNavigation?: (nextUrl?: string, options?: SpaNavigationOptions) => void;
+};
+type ContentWindowState = typeof window & {
+  [CONTENT_CLEANUP_KEY]?: () => void;
+  [HISTORY_PATCH_KEY]?: HistoryPatchState;
+};
+
+const contentWindow = window as ContentWindowState;
+contentWindow[CONTENT_CLEANUP_KEY]?.();
+const eventAbortController = new AbortController();
 
 let state: TranslateState = 'idle';
 let scope: TranslateScope = 'none';
@@ -56,8 +75,10 @@ let isScrollActive = false;
 let latestProgress = { completed: 0, total: 0 };
 let activeRunKind: ActiveRunKind = 'none';
 let activeRunHadBlockFailure = false;
+let pageFailedElements = new Set<Element>();
 let retryStateSnapshot: RetryStateSnapshot | null = null;
 let retryTargetElement: Element | null = null;
+let wasHistoryRestored = false;
 
 const injector = new Injector();
 const progressBar = new ProgressBar();
@@ -132,7 +153,7 @@ function markPageTranslationDone() {
   state = 'done';
   scope = 'page';
   progressBar.complete();
-  reportTranslateStatus('done', latestProgress);
+  reportTranslateStatus('done', latestProgress, undefined, getRetriableFailedParagraphs().length);
   syncFloatingBallState();
 }
 
@@ -192,6 +213,7 @@ function reportTranslateStatus(
   status: TranslateStatusMsg['status'],
   progress?: { completed: number; total: number },
   error?: string,
+  failedCount?: number,
 ) {
   if (status === 'cancelled') return;
 
@@ -201,6 +223,7 @@ function reportTranslateStatus(
       status,
       progress,
       error,
+      failedCount,
     }).catch(() => {});
   } catch {
     // Background may be unavailable during extension reload.
@@ -220,6 +243,7 @@ const translator = new Translator({
   onBatchTranslated: (_, elements, translations) => {
     for (let i = 0; i < elements.length; i++) {
       injector.insertTranslation(elements[i], translations[i]);
+      pageFailedElements.delete(elements[i]);
     }
   },
   onProgress: (completed, total) => {
@@ -245,6 +269,7 @@ const translator = new Translator({
     activeRunHadBlockFailure = true;
 
     if (activeRunKind === 'page') {
+      pageFailedElements.add(element);
       if (element.isConnected) {
         injector.showRetryMarker(element);
       }
@@ -318,6 +343,7 @@ const translator = new Translator({
     if (runKind === 'page') {
       state = 'idle';
       scope = 'none';
+      pageFailedElements.clear();
       pendingIncrementalTranslation = false;
       pendingNewContent = false;
       injector.clearLoadingIndicators();
@@ -352,6 +378,7 @@ const translator = new Translator({
     if (runKind === 'page') {
       state = 'idle';
       scope = 'none';
+      pageFailedElements.clear();
       pendingIncrementalTranslation = false;
       pendingNewContent = false;
       injector.clearLoadingIndicators();
@@ -378,7 +405,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'START_TRANSLATE_IF_IDLE') {
-    sendResponse(handleStartTranslateIfIdle());
+    sendResponse(handleStartTranslateIfIdle(message));
   }
 });
 
@@ -402,6 +429,14 @@ function handleToggle(): ToggleTranslateResponse {
           return { action: 'started' };
         }
 
+        if (scope === 'page') {
+          const failedParagraphs = getRetriableFailedParagraphs();
+          if (failedParagraphs.length > 0) {
+            void resumeFailedPageTranslation(failedParagraphs);
+            return { action: 'started' };
+          }
+        }
+
         translationsVisible = !translationsVisible;
         injector.setVisibility(translationsVisible);
         syncFloatingBallState();
@@ -412,7 +447,20 @@ function handleToggle(): ToggleTranslateResponse {
   }
 }
 
-function handleStartTranslateIfIdle(): StartTranslateIfIdleResponse {
+function getNavigationType(): PerformanceNavigationTiming['type'] | null {
+  const [entry] = performance.getEntriesByType('navigation') as PerformanceNavigationTiming[];
+  return entry?.type ?? null;
+}
+
+function isHistoryTraversalRestore(): boolean {
+  return getNavigationType() === 'back_forward' || wasHistoryRestored;
+}
+
+function handleStartTranslateIfIdle(message: StartTranslateIfIdleMsg): StartTranslateIfIdleResponse {
+  if (message.reason === 'auto' && isHistoryTraversalRestore()) {
+    return { started: false };
+  }
+
   if (toggleBusy) {
     return { started: false };
   }
@@ -478,6 +526,34 @@ function shouldSkipRenderedElement(el: Element): boolean {
   return hasFreshRenderedTranslation(el) || hasFreshFailedTranslation(el);
 }
 
+function getRetriableFailedParagraphs(): ExtractedParagraph[] {
+  const paragraphs: ExtractedParagraph[] = [];
+
+  for (const element of Array.from(pageFailedElements)) {
+    if (!element.isConnected) {
+      pageFailedElements.delete(element);
+      continue;
+    }
+
+    const { text, codeMap } = extractTextWithCodeProtection(element);
+    const sourceText = text.trim();
+    if (!sourceText) {
+      pageFailedElements.delete(element);
+      injector.clearRetryMarker(element);
+      continue;
+    }
+
+    if (!translator.hasUpToDateFailure(element, sourceText)) {
+      pageFailedElements.delete(element);
+      continue;
+    }
+
+    paragraphs.push({ element, text: sourceText, codeMap });
+  }
+
+  return paragraphs;
+}
+
 async function ensureMainContainerReady(): Promise<boolean> {
   if (mainContainer?.isConnected) return true;
 
@@ -523,6 +599,7 @@ async function runTranslationPass(config?: ProviderConfig) {
 
 async function startTranslation() {
   clearNavigationAutoTranslateTimer();
+  pageFailedElements.clear();
   state = 'translating';
   scope = 'page';
   translationsVisible = true;
@@ -551,6 +628,49 @@ async function startTranslation() {
   }
 
   startObserver();
+}
+
+async function resumeFailedPageTranslation(failedParagraphs = getRetriableFailedParagraphs()) {
+  clearNavigationAutoTranslateTimer();
+
+  if (failedParagraphs.length === 0) {
+    markPageTranslationDone();
+    return false;
+  }
+
+  const ready = await ensureMainContainerReady();
+  if (!ready || !mainContainer) return false;
+
+  const config = await loadProviderConfig();
+  if (!isProviderConfigured(config)) {
+    const error = '请先在扩展弹窗中完成翻译配置';
+    progressBar.show();
+    progressBar.error(error);
+    reportTranslateStatus('error', latestProgress, error, failedParagraphs.length);
+    showFloatingBallError(error);
+    return false;
+  }
+
+  translationsVisible = true;
+  pendingIncrementalTranslation = false;
+  pendingNewContent = false;
+  latestProgress = { completed: 0, total: 0 };
+  state = 'translating';
+  scope = 'page';
+  injector.setVisibility(true);
+  injector.setTargetLanguage(config.targetLanguage);
+  injector.setScope('page');
+  progressBar.show();
+  syncFloatingBallState();
+  startRun('page');
+
+  await translator.start(mainContainer, config.targetLanguage, {
+    paragraphs: failedParagraphs,
+    shouldSkipElement: shouldSkipRenderedElement,
+    retryFailed: true,
+  });
+  startObserver();
+  return true;
 }
 
 function isEditableElement(el: Element | null): boolean {
@@ -712,6 +832,7 @@ function cancelTranslation() {
 
   state = 'idle';
   scope = 'none';
+  pageFailedElements.clear();
   translator.cancel();
   injector.hideAll();
   stopObserver();
@@ -800,7 +921,15 @@ function handleScroll() {
   }, SCROLL_IDLE_MS);
 }
 
-window.addEventListener('scroll', handleScroll, { passive: true });
+window.addEventListener('scroll', handleScroll, { passive: true, signal: eventAbortController.signal });
+
+function handlePageShow(event: PageTransitionEvent) {
+  if (event.persisted) {
+    wasHistoryRestored = true;
+  }
+}
+
+window.addEventListener('pageshow', handlePageShow, { signal: eventAbortController.signal });
 
 // --- MutationObserver ---
 
@@ -870,7 +999,7 @@ function stopObserver() {
 
 let currentNavigationKey = getNavigationKey();
 
-function handleSpaNavigation(nextUrl?: string, options: { autoTranslateAfterNavigation?: boolean } = {}) {
+function handleSpaNavigation(nextUrl?: string, options: SpaNavigationOptions = {}) {
   const nextNavigationKey = getNavigationKey(nextUrl);
   if (nextNavigationKey === currentNavigationKey) return;
   currentNavigationKey = nextNavigationKey;
@@ -886,6 +1015,7 @@ function handleSpaNavigation(nextUrl?: string, options: { autoTranslateAfterNavi
   pendingIncrementalTranslation = false;
   pendingNewContent = false;
   latestProgress = { completed: 0, total: 0 };
+  pageFailedElements.clear();
   injector.removeAll();
   translator.resetState();
   stopObserver();
@@ -897,26 +1027,39 @@ function handleSpaNavigation(nextUrl?: string, options: { autoTranslateAfterNavi
   }
 }
 
-window.addEventListener('popstate', () => handleSpaNavigation());
+function handlePopState() {
+  handleSpaNavigation();
+}
 
-const originalPushState = history.pushState;
-const originalReplaceState = history.replaceState;
+window.addEventListener('popstate', handlePopState, { signal: eventAbortController.signal });
 
-history.pushState = function (...args) {
-  originalPushState.apply(this, args);
-  handleSpaNavigation(
-    typeof args[2] === 'string' || args[2] instanceof URL ? String(args[2]) : undefined,
-    { autoTranslateAfterNavigation: true },
-  );
-};
+function getHistoryStateUrlArg(args: Parameters<History['pushState']>): string | undefined {
+  return typeof args[2] === 'string' || args[2] instanceof URL ? String(args[2]) : undefined;
+}
 
-history.replaceState = function (...args) {
-  originalReplaceState.apply(this, args);
-  handleSpaNavigation(
-    typeof args[2] === 'string' || args[2] instanceof URL ? String(args[2]) : undefined,
-    { autoTranslateAfterNavigation: true },
-  );
-};
+function installHistoryPatch() {
+  if (!contentWindow[HISTORY_PATCH_KEY]) {
+    const patchState: HistoryPatchState = {
+      originalPushState: history.pushState,
+      originalReplaceState: history.replaceState,
+    };
+    contentWindow[HISTORY_PATCH_KEY] = patchState;
+
+    history.pushState = function (...args) {
+      patchState.originalPushState.apply(this, args);
+      patchState.handleNavigation?.(getHistoryStateUrlArg(args), { autoTranslateAfterNavigation: true });
+    };
+
+    history.replaceState = function (...args) {
+      patchState.originalReplaceState.apply(this, args);
+      patchState.handleNavigation?.(getHistoryStateUrlArg(args), { autoTranslateAfterNavigation: true });
+    };
+  }
+
+  contentWindow[HISTORY_PATCH_KEY].handleNavigation = handleSpaNavigation;
+}
+
+installHistoryPatch();
 
 const hoverController = new HoverController({
   onTrigger: (el) => handleSegmentTranslation(el),
@@ -924,5 +1067,14 @@ const hoverController = new HoverController({
   isTranslatable: (el) => !hasFreshRenderedTranslation(el),
 });
 hoverController.enable();
+
+contentWindow[CONTENT_CLEANUP_KEY] = () => {
+  eventAbortController.abort();
+  clearNavigationAutoTranslateTimer();
+  translator.cancel();
+  stopObserver();
+  hoverController.destroy();
+  clearFloatingBallErrorTimer();
+};
 
 console.log('[NextTranslate] Content script injected');

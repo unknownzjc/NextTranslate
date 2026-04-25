@@ -210,6 +210,11 @@ export class Translator {
           return;
         }
 
+        if (result.translations.length !== batchJobs.length) {
+          this.markBatchFailed(batchJobs, '翻译结果数量不匹配，请重试', runId);
+          return;
+        }
+
         for (let i = 0; i < result.translations.length; i++) {
           const job = batchJobs[i];
           if (!job) continue;

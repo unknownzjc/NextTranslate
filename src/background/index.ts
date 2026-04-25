@@ -23,12 +23,14 @@ interface TabState {
   totalBatches: number;
   status: 'translating' | 'done' | 'cancelled' | 'error';
   error?: string;
+  failedCount?: number;
   retryBudget: number;
 }
 
 // --- State ---
 
 const tabStates = new Map<number, TabState>();
+const historyTraversalTabs = new Set<number>();
 
 // --- Request queue (global concurrency + round-robin) ---
 
@@ -304,6 +306,7 @@ function publishTabStatus(tabId: number, state: TabState) {
     status: state.status,
     progress,
     error: state.error,
+    failedCount: state.failedCount,
   } satisfies TranslateStatusMsg).catch(() => {});
 
   syncAlarmKeepalive();
@@ -367,6 +370,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       state.error = report.error;
       state.completedBatches = report.progress?.completed ?? state.completedBatches;
       state.totalBatches = report.progress?.total ?? state.totalBatches;
+      state.failedCount = report.failedCount ?? (report.status === 'translating' ? undefined : state.failedCount);
       publishTabStatus(tabId, state);
       sendResponse({ ok: true });
       return;
@@ -395,6 +399,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           status: state.status,
           progress: { completed: state.completedBatches, total: state.totalBatches },
           error: state.error,
+          failedCount: state.failedCount,
         } satisfies TranslateStatusMsg);
       } else {
         sendResponse(null);
@@ -520,6 +525,18 @@ async function injectOpenTabs() {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   clearTabState(tabId);
+  historyTraversalTabs.delete(tabId);
+});
+
+chrome.webNavigation?.onCommitted.addListener((details) => {
+  if (details.frameId !== 0) return;
+
+  if (details.transitionQualifiers.includes('forward_back')) {
+    historyTraversalTabs.add(details.tabId);
+    return;
+  }
+
+  historyTraversalTabs.delete(details.tabId);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -588,13 +605,18 @@ async function sendStartTranslateIfIdleToTab(tabId: number, url?: string | null)
   if (!injected) return;
 
   try {
-    await chrome.tabs.sendMessage(tabId, { type: 'START_TRANSLATE_IF_IDLE' });
+    await chrome.tabs.sendMessage(tabId, { type: 'START_TRANSLATE_IF_IDLE', reason: 'auto' });
   } catch {
     // Ignore tabs that navigated away or no longer accept messages.
   }
 }
 
 async function maybeAutoTranslateTab(tabId: number, url?: string | null) {
+  if (historyTraversalTabs.has(tabId)) {
+    historyTraversalTabs.delete(tabId);
+    return;
+  }
+
   if (!await isAutoTranslateEnabledForUrl(url)) {
     return;
   }

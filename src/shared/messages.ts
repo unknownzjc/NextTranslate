@@ -4,7 +4,10 @@ export type ToggleTranslateResponse = {
   action: 'started' | 'cancelled' | 'toggled_visible' | 'toggled_hidden' | 'busy';
 };
 
-export type StartTranslateIfIdleMsg = { type: 'START_TRANSLATE_IF_IDLE' };
+export type StartTranslateIfIdleMsg = {
+  type: 'START_TRANSLATE_IF_IDLE';
+  reason?: 'auto';
+};
 export type StartTranslateIfIdleResponse = {
   started: boolean;
 };
@@ -22,6 +25,7 @@ export type ReportTranslateStatusMsg = {
   status: 'translating' | 'done' | 'error';
   progress?: { completed: number; total: number };
   error?: string;
+  failedCount?: number;
 };
 
 export type CancelTranslateMsg = { type: 'CANCEL_TRANSLATE' };
@@ -40,6 +44,7 @@ export type TranslateStatusMsg = {
   status: 'translating' | 'done' | 'cancelled' | 'error';
   progress?: { completed: number; total: number };
   error?: string;
+  failedCount?: number;
 };
 
 // Popup → Background

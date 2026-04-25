@@ -7,6 +7,7 @@ type RuntimeMessageListener = (
 ) => unknown;
 
 type TabsUpdatedListener = (tabId: number, changeInfo: { status?: string }, tab: chrome.tabs.Tab) => void;
+type WebNavigationCommittedListener = (details: chrome.webNavigation.WebNavigationTransitionCallbackDetails) => void;
 
 async function flushPromises(times = 6) {
   for (let i = 0; i < times; i++) {
@@ -149,8 +150,10 @@ describe('background tab state clearing', () => {
 
 describe('background content UI injection', () => {
   let tabsUpdatedListener!: TabsUpdatedListener;
+  let webNavigationCommittedListener!: WebNavigationCommittedListener;
   let ensureContentUiInjected!: ReturnType<typeof vi.fn>;
   let isAutoTranslateEnabledForUrl!: ReturnType<typeof vi.fn>;
+  let tabsSendMessage!: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -158,6 +161,7 @@ describe('background content UI injection', () => {
 
     ensureContentUiInjected = vi.fn(async () => true);
     isAutoTranslateEnabledForUrl = vi.fn(async () => false);
+    tabsSendMessage = vi.fn(async () => undefined);
 
     vi.doMock('@shared/storage', () => ({
       loadProviderConfig: vi.fn(async () => ({
@@ -210,7 +214,7 @@ describe('background content UI injection', () => {
       tabs: {
         query: vi.fn(async () => []),
         get: vi.fn(async (tabId: number) => ({ id: tabId, url: 'https://example.com/page' })),
-        sendMessage: vi.fn(async () => undefined),
+        sendMessage: tabsSendMessage,
         onRemoved: {
           addListener: vi.fn(),
         },
@@ -221,6 +225,13 @@ describe('background content UI injection', () => {
         },
         onActivated: {
           addListener: vi.fn(),
+        },
+      },
+      webNavigation: {
+        onCommitted: {
+          addListener: vi.fn((listener: WebNavigationCommittedListener) => {
+            webNavigationCommittedListener = listener;
+          }),
         },
       },
       contextMenus: {
@@ -251,6 +262,57 @@ describe('background content UI injection', () => {
 
     expect(ensureContentUiInjected).toHaveBeenCalledWith(7, 'https://example.com/article');
     expect(isAutoTranslateEnabledForUrl).toHaveBeenCalledWith('https://example.com/article');
+  });
+
+  it('history 前进/回退完成加载时不会触发站点自动翻译', async () => {
+    isAutoTranslateEnabledForUrl.mockResolvedValue(true);
+    await import('../../src/background/index');
+
+    webNavigationCommittedListener({
+      documentId: 'doc-previous',
+      documentLifecycle: 'active',
+      frameType: 'outermost_frame',
+      tabId: 7,
+      frameId: 0,
+      parentFrameId: -1,
+      processId: 1,
+      timeStamp: Date.now(),
+      url: 'https://example.com/previous',
+      transitionType: 'link',
+      transitionQualifiers: ['forward_back'],
+    });
+
+    tabsUpdatedListener(7, { status: 'complete' }, { id: 7, url: 'https://example.com/previous' } as chrome.tabs.Tab);
+    await flushPromises();
+
+    expect(ensureContentUiInjected).toHaveBeenCalledWith(7, 'https://example.com/previous');
+    expect(isAutoTranslateEnabledForUrl).not.toHaveBeenCalled();
+    expect(tabsSendMessage).not.toHaveBeenCalled();
+  });
+
+  it('普通加载完成且站点开启自动翻译时会发送 auto 启动消息', async () => {
+    isAutoTranslateEnabledForUrl.mockResolvedValue(true);
+    await import('../../src/background/index');
+
+    webNavigationCommittedListener({
+      documentId: 'doc-article',
+      documentLifecycle: 'active',
+      frameType: 'outermost_frame',
+      tabId: 7,
+      frameId: 0,
+      parentFrameId: -1,
+      processId: 1,
+      timeStamp: Date.now(),
+      url: 'https://example.com/article',
+      transitionType: 'link',
+      transitionQualifiers: [],
+    });
+
+    tabsUpdatedListener(7, { status: 'complete' }, { id: 7, url: 'https://example.com/article' } as chrome.tabs.Tab);
+    await flushPromises();
+
+    expect(isAutoTranslateEnabledForUrl).toHaveBeenCalledWith('https://example.com/article');
+    expect(tabsSendMessage).toHaveBeenCalledWith(7, { type: 'START_TRANSLATE_IF_IDLE', reason: 'auto' });
   });
 });
 
