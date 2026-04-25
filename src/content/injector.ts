@@ -37,24 +37,13 @@ export class Injector {
   }
 
   detectTheme(container: Element) {
-    let el: Element | null = container;
-    while (el) {
-      const style = getComputedStyle(el);
-      const bg = style.backgroundColor;
-      const alpha = parseAlpha(bg);
-      if (alpha > 0) {
-        const luminance = computeLuminance(bg);
-        this.theme = luminance > 0.5 ? 'light' : 'dark';
-        return;
-      }
-      el = el.parentElement;
-    }
-    this.theme = 'light';
+    this.theme = detectElementTheme(container);
   }
 
   insertTranslation(sourceEl: Element, translatedText: string) {
     const ntId = this.ensureNtId(sourceEl);
     const hostEl = getTranslationHost(sourceEl);
+    const theme = detectElementTheme(hostEl);
     let translationEl = this.findExistingTranslation(sourceEl, ntId);
 
     this.clearRetryMarker(sourceEl);
@@ -64,7 +53,7 @@ export class Injector {
       translationEl.className = 'nt-translation';
       translationEl.setAttribute('data-nt', '');
       translationEl.setAttribute('data-nt-id', ntId);
-      translationEl.setAttribute('data-nt-theme', this.theme);
+      translationEl.setAttribute('data-nt-theme', theme);
       translationEl.setAttribute('lang', LANG_MAP[this.targetLanguage] ?? 'zh-CN');
       const translationKind = getTranslationKind(sourceEl);
       if (translationKind) {
@@ -81,6 +70,8 @@ export class Injector {
         hostEl.parentNode?.insertBefore(translationEl, hostEl.nextSibling);
       }
       this.translationElements.add(translationEl);
+    } else {
+      translationEl.setAttribute('data-nt-theme', theme);
     }
 
     // Transition from loading skeleton to real text
@@ -98,6 +89,7 @@ export class Injector {
     const ntId = this.ensureNtId(sourceEl);
     const hostEl = getTranslationHost(sourceEl);
     const dotsHost = getDotsHost(sourceEl);
+    const theme = detectElementTheme(hostEl);
 
     this.clearRetryMarker(sourceEl);
 
@@ -110,7 +102,7 @@ export class Injector {
     const dotsEl = document.createElement('span');
     dotsEl.className = 'nt-pending-dots';
     dotsEl.setAttribute('data-nt', '');
-    dotsEl.setAttribute('data-nt-theme', this.theme);
+    dotsEl.setAttribute('data-nt-theme', theme);
     if (translationKind) {
       dotsEl.setAttribute('data-nt-kind', translationKind);
     }
@@ -123,7 +115,7 @@ export class Injector {
     placeholderEl.className = 'nt-translation nt-loading';
     placeholderEl.setAttribute('data-nt', '');
     placeholderEl.setAttribute('data-nt-id', ntId);
-    placeholderEl.setAttribute('data-nt-theme', this.theme);
+    placeholderEl.setAttribute('data-nt-theme', theme);
     placeholderEl.setAttribute('lang', LANG_MAP[this.targetLanguage] ?? 'zh-CN');
     if (translationKind) {
       placeholderEl.setAttribute('data-nt-kind', translationKind);
@@ -144,6 +136,7 @@ export class Injector {
   showRetryMarker(sourceEl: Element) {
     const ntId = this.ensureNtId(sourceEl);
     const dotsHost = getDotsHost(sourceEl);
+    const theme = detectElementTheme(dotsHost);
     const translationKind = getTranslationKind(sourceEl);
 
     this.clearPendingDots(sourceEl);
@@ -164,7 +157,7 @@ export class Injector {
 
     retryEl.setAttribute('data-nt', '');
     retryEl.setAttribute('data-nt-id', ntId);
-    retryEl.setAttribute('data-nt-theme', this.theme);
+    retryEl.setAttribute('data-nt-theme', theme);
     retryEl.setAttribute('title', '重试翻译此段');
     retryEl.setAttribute('aria-label', '重试翻译此段');
     if (translationKind) {
@@ -429,17 +422,95 @@ function shouldStopPullTitleGrouping(el: HTMLElement): boolean {
   return false;
 }
 
-function parseAlpha(color: string): number {
-  if (color === 'transparent' || color === 'rgba(0, 0, 0, 0)') return 0;
-  const match = color.match(/rgba?\([\d.]+,\s*[\d.]+,\s*[\d.]+(?:,\s*([\d.]+))?\)/);
-  if (match) return match[1] !== undefined ? parseFloat(match[1]) : 1;
-  return 1;
+interface RgbaColor {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
 }
 
-function computeLuminance(color: string): number {
-  const match = color.match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)/);
-  if (!match) return 1;
-  const [r, g, b] = [parseFloat(match[1]) / 255, parseFloat(match[2]) / 255, parseFloat(match[3]) / 255];
+function detectElementTheme(container: Element): 'light' | 'dark' {
+  const bg = computeEffectiveBackground(container);
+  return computeLuminance(bg) > 0.5 ? 'light' : 'dark';
+}
+
+function computeEffectiveBackground(container: Element): RgbaColor {
+  const layers: RgbaColor[] = [];
+  let el: Element | null = container;
+
+  while (el) {
+    const color = parseCssRgbColor(getComputedStyle(el).backgroundColor);
+    if (color && color.a > 0) {
+      layers.unshift(color);
+    }
+    el = el.parentElement;
+  }
+
+  // Browser canvas/page backgrounds default to white when no opaque page background is set.
+  return layers.reduce(
+    (base, layer) => compositeColor(layer, base),
+    { r: 255, g: 255, b: 255, a: 1 },
+  );
+}
+
+function parseCssRgbColor(color: string): RgbaColor | null {
+  const normalized = color.trim().toLowerCase();
+  if (!normalized || normalized === 'transparent') return null;
+
+  const match = normalized.match(/^rgba?\((.*)\)$/);
+  if (!match) return null;
+
+  const body = match[1].trim();
+  const commaParts = body.split(',').map(part => part.trim()).filter(Boolean);
+
+  if (commaParts.length >= 3) {
+    return {
+      r: parseRgbChannel(commaParts[0]),
+      g: parseRgbChannel(commaParts[1]),
+      b: parseRgbChannel(commaParts[2]),
+      a: parseAlphaChannel(commaParts[3]),
+    };
+  }
+
+  const [channelsPart, alphaPart] = body.split('/').map(part => part.trim());
+  const channelParts = channelsPart.split(/\s+/).filter(Boolean);
+  if (channelParts.length < 3) return null;
+
+  return {
+    r: parseRgbChannel(channelParts[0]),
+    g: parseRgbChannel(channelParts[1]),
+    b: parseRgbChannel(channelParts[2]),
+    a: parseAlphaChannel(alphaPart),
+  };
+}
+
+function parseRgbChannel(value: string): number {
+  const parsed = value.endsWith('%') ? parseFloat(value) * 2.55 : parseFloat(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.min(255, Math.max(0, parsed));
+}
+
+function parseAlphaChannel(value?: string): number {
+  if (value === undefined || value === '') return 1;
+  const parsed = value.endsWith('%') ? parseFloat(value) / 100 : parseFloat(value);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.min(1, Math.max(0, parsed));
+}
+
+function compositeColor(foreground: RgbaColor, background: RgbaColor): RgbaColor {
+  const alpha = foreground.a + background.a * (1 - foreground.a);
+  if (alpha <= 0) return { r: 0, g: 0, b: 0, a: 0 };
+
+  return {
+    r: (foreground.r * foreground.a + background.r * background.a * (1 - foreground.a)) / alpha,
+    g: (foreground.g * foreground.a + background.g * background.a * (1 - foreground.a)) / alpha,
+    b: (foreground.b * foreground.a + background.b * background.a * (1 - foreground.a)) / alpha,
+    a: alpha,
+  };
+}
+
+function computeLuminance(color: RgbaColor): number {
+  const [r, g, b] = [color.r / 255, color.g / 255, color.b / 255];
   const linearize = (c: number) => c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
   return 0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b);
 }

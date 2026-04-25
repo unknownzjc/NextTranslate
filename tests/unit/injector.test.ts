@@ -5,6 +5,7 @@ describe('Injector', () => {
   let injector: Injector;
 
   beforeEach(() => {
+    document.body.removeAttribute('style');
     document.body.innerHTML = '<div id="content"><p id="p1">Hello world</p><p id="p2">Good morning</p></div>';
     injector = new Injector();
   });
@@ -33,6 +34,47 @@ describe('Injector', () => {
     expect(ntId).not.toBeNull();
     const translation = p1.querySelector('.nt-translation');
     expect(translation!.getAttribute('data-nt-id')).toBe(ntId);
+  });
+
+  it('半透明深色背景会按与页面背景合成后的颜色判断主题', () => {
+    document.body.style.backgroundColor = 'rgb(255, 255, 255)';
+    document.body.innerHTML = `
+      <div id="panel" style="background-color: rgba(0, 0, 0, 0.04)">
+        <p id="p1">Hello world with enough text</p>
+      </div>
+    `;
+
+    const p1 = document.getElementById('p1')!;
+    injector.detectTheme(p1);
+    injector.showLoadingPlaceholder(p1);
+
+    const placeholder = p1.querySelector('.nt-translation') as HTMLElement;
+    expect(placeholder.getAttribute('data-nt-theme')).toBe('light');
+
+    injector.insertTranslation(p1, '你好世界');
+    const translation = p1.querySelector('.nt-translation') as HTMLElement;
+    expect(translation.getAttribute('data-nt-theme')).toBe('light');
+  });
+
+  it('每条译文按自身宿主重新计算主题，避免上一段主题污染', () => {
+    document.body.innerHTML = `
+      <div id="dark" style="background-color: rgb(13, 17, 23)">
+        <p id="dark-p">Dark paragraph with enough text</p>
+      </div>
+      <div id="light" style="background-color: rgb(255, 255, 255)">
+        <p id="light-p">Light paragraph with enough text</p>
+      </div>
+    `;
+
+    const darkP = document.getElementById('dark-p')!;
+    const lightP = document.getElementById('light-p')!;
+
+    injector.detectTheme(darkP);
+    injector.insertTranslation(lightP, '浅色区域译文');
+    injector.insertTranslation(darkP, '深色区域译文');
+
+    expect((lightP.querySelector('.nt-translation') as HTMLElement).getAttribute('data-nt-theme')).toBe('light');
+    expect((darkP.querySelector('.nt-translation') as HTMLElement).getAttribute('data-nt-theme')).toBe('dark');
   });
 
   it('切换显示/隐藏', () => {
