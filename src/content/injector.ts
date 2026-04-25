@@ -429,7 +429,7 @@ interface RgbaColor {
   a: number;
 }
 
-function detectElementTheme(container: Element): 'light' | 'dark' {
+export function detectElementTheme(container: Element): 'light' | 'dark' {
   const bg = computeEffectiveBackground(container);
   return computeLuminance(bg) > 0.5 ? 'light' : 'dark';
 }

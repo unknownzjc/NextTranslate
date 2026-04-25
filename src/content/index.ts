@@ -21,6 +21,7 @@ import { Injector } from './injector';
 import { ProgressBar } from './progress';
 import { FloatingBall } from './floating-ball';
 import { HoverController } from './hover-controller';
+import { SelectionTranslator } from './selection-translator';
 
 (window as unknown as Record<string, unknown>)[CONTENT_SCRIPT_READY_KEY] = true;
 
@@ -1021,6 +1022,7 @@ function handleSpaNavigation(nextUrl?: string, options: SpaNavigationOptions = {
   stopObserver();
   mainContainer = null;
   hoverController.reset();
+  selectionTranslator.reset();
   syncFloatingBallState();
   if (options.autoTranslateAfterNavigation) {
     scheduleAutoTranslateAfterSpaNavigation();
@@ -1068,12 +1070,19 @@ const hoverController = new HoverController({
 });
 hoverController.enable();
 
+const selectionTranslator = new SelectionTranslator(
+  () => loadProviderConfig(),
+  eventAbortController.signal,
+);
+selectionTranslator.enable();
+
 contentWindow[CONTENT_CLEANUP_KEY] = () => {
   eventAbortController.abort();
   clearNavigationAutoTranslateTimer();
   translator.cancel();
   stopObserver();
   hoverController.destroy();
+  selectionTranslator.destroy();
   clearFloatingBallErrorTimer();
 };
 
