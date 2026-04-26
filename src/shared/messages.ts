@@ -18,6 +18,7 @@ export type TranslateBatchMsg = {
   batchId: string;
   texts: string[];
   totalBatches: number;
+  purpose?: 'selection';
 };
 
 export type ReportTranslateStatusMsg = {

@@ -131,6 +131,7 @@ async function processItem(item: QueueItem) {
       targetLanguage: config.targetLanguage,
       model: config.model,
       mode,
+      purpose: message.purpose,
     });
 
     const url = `${config.endpoint}/chat/completions`;
