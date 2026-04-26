@@ -43,9 +43,6 @@ export class SelectionTranslator {
     document.addEventListener('mousedown', this.mouseDownHandler, { signal: this.signal });
     document.addEventListener('mouseup', this.mouseUpHandler, { signal: this.signal });
 
-    // Hide dot/popup on scroll (capture: true needed because scroll events don't bubble)
-    document.addEventListener('scroll', () => this.reset(), { capture: true, signal: this.signal });
-
     // Auto-cleanup on abort
     this.signal.addEventListener('abort', () => this.destroy(), { once: true });
   }
@@ -136,18 +133,6 @@ export class SelectionTranslator {
     container.className = 'nt-sel-popup';
     container.setAttribute('data-nt', '');
 
-    // Close button
-    const closeBtn = document.createElement('span');
-    closeBtn.className = 'nt-sel-popup-close';
-    closeBtn.setAttribute('role', 'button');
-    closeBtn.setAttribute('aria-label', '关闭');
-    closeBtn.textContent = '✕';
-    closeBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.hidePopup();
-    });
-    container.appendChild(closeBtn);
-
     const originalDiv = document.createElement('div');
     originalDiv.className = 'nt-sel-popup-original';
 
@@ -157,8 +142,9 @@ export class SelectionTranslator {
     container.appendChild(originalDiv);
     container.appendChild(resultDiv);
 
-    // Clear hide timer on popup enter (from dot leave)
+    // Mouse tracking on popup to manage hide delay
     container.addEventListener('mouseenter', () => this.handlePopupEnter());
+    container.addEventListener('mouseleave', () => this.handlePopupLeave());
 
     (document.body || document.documentElement).appendChild(container);
     this.popup = container;
@@ -209,7 +195,6 @@ export class SelectionTranslator {
   private handleMouseDown(): void {
     this.isMouseSelecting = true;
     this.hideDot();
-    this.hidePopup();
   }
 
   private handleMouseUp(): void {
@@ -300,6 +285,13 @@ export class SelectionTranslator {
   private handlePopupEnter(): void {
     this.clearTimer(this.hideTimer);
     this.hideTimer = null;
+  }
+
+  private handlePopupLeave(): void {
+    this.hideTimer = setTimeout(() => {
+      this.hideTimer = null;
+      this.hidePopup();
+    }, POPUP_HIDE_DELAY_MS);
   }
 
   // --- Private: translation ---
