@@ -8,7 +8,6 @@ const DOT_SIZE_PX = 10;
 const DOT_OFFSET_PX = 4;
 const POPUP_SHOW_DELAY_MS = 150;
 const POPUP_HIDE_DELAY_MS = 300;
-const MAX_ORIGINAL_TEXT_LENGTH = 150;
 const MAX_SELECTION_LENGTH = 5000;
 const MIN_SELECTION_LENGTH = 2;
 
@@ -22,7 +21,7 @@ export class SelectionTranslator {
   private hideTimer: ReturnType<typeof setTimeout> | null = null;
   private isMouseSelecting = false;
   private selectionChangeHandler: (() => void) | null = null;
-  private mouseDownHandler: (() => void) | null = null;
+  private mouseDownHandler: ((e: MouseEvent) => void) | null = null;
   private mouseUpHandler: (() => void) | null = null;
   private dotEnterHandler: (() => void) | null = null;
   private dotLeaveHandler: (() => void) | null = null;
@@ -38,13 +37,17 @@ export class SelectionTranslator {
     this.selectionChangeHandler = () => this.handleSelectionChange();
     document.addEventListener('selectionchange', this.selectionChangeHandler, { signal: this.signal });
 
-    this.mouseDownHandler = () => this.handleMouseDown();
+    this.mouseDownHandler = (e) => this.handleMouseDown(e);
     this.mouseUpHandler = () => this.handleMouseUp();
     document.addEventListener('mousedown', this.mouseDownHandler, { signal: this.signal });
     document.addEventListener('mouseup', this.mouseUpHandler, { signal: this.signal });
 
     // Hide dot/popup on scroll (capture: true needed because scroll events don't bubble)
-    document.addEventListener('scroll', () => this.reset(), { capture: true, signal: this.signal });
+    document.addEventListener('scroll', (e) => {
+      // Don't hide when scrolling inside our own popup
+      if (e.target instanceof HTMLElement && e.target.closest('[data-nt]')) return;
+      this.reset();
+    }, { capture: true, signal: this.signal });
 
     // Auto-cleanup on abort
     this.signal.addEventListener('abort', () => this.destroy(), { once: true });
@@ -148,13 +151,9 @@ export class SelectionTranslator {
     });
     container.appendChild(closeBtn);
 
-    const originalDiv = document.createElement('div');
-    originalDiv.className = 'nt-sel-popup-original';
-
     const resultDiv = document.createElement('div');
     resultDiv.className = 'nt-sel-popup-result';
 
-    container.appendChild(originalDiv);
     container.appendChild(resultDiv);
 
     // Clear hide timer on popup enter (from dot leave)
@@ -178,8 +177,8 @@ export class SelectionTranslator {
       left = dotRect.right + 8;
     }
 
-    // Center vertically on dot
-    let top = dotRect.top + (DOT_SIZE_PX - popupHeight) / 2;
+    // Align top with dot top
+    let top = dotRect.top;
 
     // Clamp to viewport
     top = Math.max(8, top);
@@ -206,7 +205,9 @@ export class SelectionTranslator {
 
   // --- Private: event handlers ---
 
-  private handleMouseDown(): void {
+  private handleMouseDown(e: MouseEvent): void {
+    // Don't hide when clicking inside our own popup or dot
+    if (e.target instanceof HTMLElement && e.target.closest('[data-nt]')) return;
     this.isMouseSelecting = true;
     this.hideDot();
     this.hidePopup();
@@ -310,12 +311,6 @@ export class SelectionTranslator {
     this.createPopup();
     if (!this.popup) return;
 
-    // Set original text
-    const originalDiv = this.popup.querySelector('.nt-sel-popup-original');
-    if (originalDiv) {
-      originalDiv.textContent = truncateText(this.selectedText, MAX_ORIGINAL_TEXT_LENGTH);
-    }
-
     // Detect theme from selection ancestor
     this.applyTheme();
 
@@ -380,6 +375,7 @@ export class SelectionTranslator {
         batchId: requestId,
         texts: [truncatedText],
         totalBatches: 0,
+        purpose: 'selection',
       });
 
       // Discard stale responses

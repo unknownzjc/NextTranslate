@@ -6,6 +6,7 @@ interface TranslateRequestParams {
   model: string;
   mode: 'json' | 'separator';
   glossary?: string[];
+  purpose?: 'selection';
 }
 
 interface ChatCompletionRequest {
@@ -18,10 +19,22 @@ interface ChatCompletionRequest {
 const GLOSSARY_BLOCK = (glossary: string[]) =>
   `\nGlossary — translate these terms consistently across all paragraphs:\n${glossary.join(', ')}`;
 
-function buildSystemPrompt(targetLanguage: string, mode: 'json' | 'separator', glossary?: string[]): string {
+function buildSystemPrompt(targetLanguage: string, mode: 'json' | 'separator', glossary?: string[], purpose?: 'selection'): string {
   const glossaryStr = glossary && glossary.length > 0 ? GLOSSARY_BLOCK(glossary) : '';
 
   if (mode === 'json') {
+    if (purpose === 'selection') {
+      return `You are a dictionary assistant. For the given word or phrase:
+1. Provide the meaning or translation in ${targetLanguage}. Include part of speech, common definitions, and any relevant nuances.
+2. Provide 2-3 example sentences in the original language, each followed by its ${targetLanguage} translation on the next line.
+
+Rules:
+- You will receive a JSON object with a "texts" array containing the word(s) to define.
+- Return a JSON object with a "translations" array containing the dictionary-style output.
+- The "translations" array MUST have the same length as the "texts" array.
+- Format each translation as plain text. Use blank lines between the definition section and examples section.
+- Keep technical terms in their original form when appropriate.${glossaryStr}`;
+    }
     return `You are a translation engine. Translate the following text into ${targetLanguage}.
 Rules:
 - You will receive a JSON object with a "texts" array containing paragraphs to translate.
@@ -45,8 +58,8 @@ Rules:
 }
 
 export function buildTranslateRequest(params: TranslateRequestParams): ChatCompletionRequest {
-  const { texts, targetLanguage, model, mode, glossary } = params;
-  const systemPrompt = buildSystemPrompt(targetLanguage, mode, glossary);
+  const { texts, targetLanguage, model, mode, glossary, purpose } = params;
+  const systemPrompt = buildSystemPrompt(targetLanguage, mode, glossary, purpose);
 
   const userContent = mode === 'json'
     ? JSON.stringify({ texts })
